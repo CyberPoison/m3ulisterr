@@ -1,0 +1,3 @@
+# These libraries are served ONLY by dashboard.php (after login), never directly.
+RewriteEngine On
+RewriteRule ^ - [F]

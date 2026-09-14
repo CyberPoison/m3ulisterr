@@ -1,0 +1,14 @@
+sessions/
+videos/
+channels/
+node_modules/
+HeadlessVidX/node_modules/
+cache.json
+*.log
+*.m3u
+*.m3u8
+adult-movies.json
+movies_*.json
+playlist*.json
+*.zip
+VLC Debug*.txt

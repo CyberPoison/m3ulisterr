@@ -74,8 +74,7 @@ if (isset($_GET['movieId']) && !empty($_GET['movieId'])) {
     $movieId = $_GET['movieId'];
 
     $type = $_GET['type'] ?? 'movies';
-    $raw_data = isset($_GET['data']) ? preg_replace('/\.(mp4|mkv|ts|m3u8)$/i', '', $_GET['data']) : '';
-    $episodeData = $raw_data ? base64_decode($raw_data) : '';
+    $episodeData = isset($_GET['data']) ? base64_decode($_GET['data']) : '';
 } else {
     echo 'The movieId parameter was not passed or is empty!';
     exit();
@@ -417,15 +416,6 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
                         // Store the successful function name
                         $successfulFunctionName = $functionName;
 
-                        if (empty($GLOBALS['m3u_selection'])) {
-                            global $useRealDebrid, $usePremiumize;
-                            $GLOBALS['m3u_selection'] = [
-                                'provider' => $functionName,
-                                'debrid' => ($useRealDebrid ? 'RD' : ($usePremiumize ? 'PM' : 'none')),
-                                'filename' => $title,
-                            ];
-                        }
-
                         // For pt/default requests, if this provider didn't already
                         // find native Portuguese audio, try to burn pt-PT subtitles
                         // onto whatever it did find instead.
@@ -729,15 +719,6 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
                     if ($result !== false) {
                         // Store the successful function name
                         $successfulFunctionName = $functionName;
-
-                        if (empty($GLOBALS['m3u_selection'])) {
-                            global $useRealDebrid, $usePremiumize;
-                            $GLOBALS['m3u_selection'] = [
-                                'provider' => $functionName,
-                                'debrid' => ($useRealDebrid ? 'RD' : ($usePremiumize ? 'PM' : 'none')),
-                                'filename' => $setitle,
-                            ];
-                        }
 
                         // For pt/default requests, if this provider didn't already
                         // find native Portuguese audio, try to burn pt-PT subtitles

@@ -326,7 +326,7 @@ async function loadSessions(){
   const d=await api('sessions'); if(!d.ok)return;
   $('#sessCount').textContent=d.sessions.length+' rows';
   const head=`<thead><tr><th>Title</th><th>Type</th><th>Account</th><th>Lang</th><th>Release</th><th>Debrid</th>
-    <th>Playback</th><th>Subs</th><th>Country</th><th>City / Zip</th><th>Client ISP</th><th>Device</th><th>User Agent</th><th>IP</th><th>Resolve</th></tr></thead>`;
+    <th>Playback</th><th>Subs</th><th>Country</th><th>City / Zip</th><th>Client ISP</th><th>Device</th><th>User agent</th><th>IP</th><th>Resolve</th></tr></thead>`;
   const rows=d.sessions.map(s=>{
     const debrid=s.debrid?`<span class="chip ${s.debrid.toLowerCase()==='ad'?'ad':s.debrid.toLowerCase()==='pm'?'pm':''}">${esc(s.debrid)}</span>`:'';
     const pct=s.playback_pct!=null?`<div class="pctbar"><i style="width:${s.playback_pct}%"></i></div>${s.playback_pct}%<br><span class="muted mono">${esc(s.playback_hms)}/${esc(s.duration_hms)}</span>`:'<span class="muted">—</span>';
@@ -347,7 +347,7 @@ async function loadSessions(){
       <td>${esc(s.city||'')}<br><span class="muted">${esc(s.zip||'')}</span></td>
       <td style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(s.isp||'')}">${esc(s.isp||'—')}</td>
       <td>${esc(s.device||'')}</td>
-      <td style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(s.ua||'')}">${esc(s.ua||'—')}</td>
+      <td class="mono" style="max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(s.ua||'')}">${esc(s.ua||'—')}</td>
       <td class="mono">${esc(s.ip||'')}</td>
       <td>${s.cache_hit==1?'<span class="chip">cache</span>':(s.resolve_ms!=null?esc(Math.round(s.resolve_ms))+' ms':'—')}</td>
     </tr>`;

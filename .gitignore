@@ -12,3 +12,14 @@ movies_*.json
 playlist*.json
 *.zip
 VLC Debug*.txt
+
+# M3uListerr dashboard runtime state - MUST NOT be committed. Holds the SQLite
+# database, event logs with viewer IPs/user-agents (PII), login sessions, and
+# the per-install secret. m3ulisterr_data/ is created at runtime next to the
+# app; the vendored chart libraries in m3ulisterr_assets/ ARE tracked (they are
+# shipped code, not runtime state).
+m3ulisterr_data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+config.php.m3utmp

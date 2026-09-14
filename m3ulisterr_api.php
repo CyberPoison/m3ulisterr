@@ -42,10 +42,37 @@ function m3uSessions(PDO $db, int $limit = 500): array {
                    provider, debrid, release, release_langs, resolution, codec, source_url,
                    cache_hit, resolve_ms, throughput
             FROM (SELECT * FROM events WHERE type='resolve' ORDER BY ts) GROUP BY media, ip
+        ),
+        -- A cache-hit resolve carries no release/debrid metadata (the AIOStreams
+        -- selection only runs on the ORIGINAL grab), so those fields come back
+        -- empty on every replay of a title. This recovers them per media from
+        -- whichever resolve event for the same release DID capture them - the
+        -- values are stable per release, so any non-empty one is correct.
+        enrich AS (
+            SELECT media,
+                   MAX(CASE WHEN debrid != '' THEN debrid END) AS debrid,
+                   MAX(CASE WHEN release != '' THEN release END) AS release,
+                   MAX(CASE WHEN provider != '' THEN provider END) AS provider,
+                   MAX(CASE WHEN release_langs != '' THEN release_langs END) AS release_langs,
+                   MAX(CASE WHEN resolution IS NOT NULL AND resolution > 0 THEN resolution END) AS resolution,
+                   MAX(CASE WHEN codec != '' THEN codec END) AS codec,
+                   MAX(CASE WHEN movie_id IS NOT NULL AND movie_id > 0 THEN movie_id END) AS movie_id,
+                   MAX(CASE WHEN media_type != '' THEN media_type END) AS media_type,
+                   MAX(CASE WHEN series_code != '' THEN series_code END) AS series_code
+            FROM events WHERE type='resolve' GROUP BY media
         )
         SELECT
-            rs.media, rs.ip, rs.movie_id, rs.media_type, rs.series_code, rs.username, rs.password, rs.lang,
-            rs.provider, rs.debrid, rs.release, rs.release_langs, rs.resolution, rs.codec,
+            rs.media, rs.ip,
+            COALESCE(NULLIF(rs.movie_id,0), en.movie_id) AS movie_id,
+            COALESCE(NULLIF(rs.media_type,''), en.media_type) AS media_type,
+            COALESCE(NULLIF(rs.series_code,''), en.series_code) AS series_code,
+            rs.username, rs.password, rs.lang,
+            COALESCE(NULLIF(rs.provider,''), en.provider) AS provider,
+            COALESCE(NULLIF(rs.debrid,''), en.debrid) AS debrid,
+            COALESCE(NULLIF(rs.release,''), en.release) AS release,
+            COALESCE(NULLIF(rs.release_langs,''), en.release_langs) AS release_langs,
+            COALESCE(NULLIF(rs.resolution,0), en.resolution) AS resolution,
+            COALESCE(NULLIF(rs.codec,''), en.codec) AS codec,
             rs.source_url, rs.cache_hit, rs.resolve_ms, rs.throughput, rs.ts AS resolved_ts,
             pl.duration, pl.audio_lang, pl.sub_count, pl.subtitles,
             seg.furthest, seg.avg_deliver, seg.max_deliver, seg.seg_count,
@@ -53,11 +80,12 @@ function m3uSessions(PDO $db, int $limit = 500): array {
             tm.title, tm.year, tm.poster, tm.overview,
             ua.ua
         FROM rs
+        LEFT JOIN enrich en ON en.media = rs.media
         LEFT JOIN pl ON pl.media = rs.media
         LEFT JOIN seg ON seg.media = rs.media AND seg.ip = rs.ip
         LEFT JOIN geo g ON g.ip = rs.ip
-        LEFT JOIN tmdb_meta tm ON tm.movie_id = rs.movie_id
-        LEFT JOIN (SELECT ip, media, MAX(ts) t, ua FROM events GROUP BY ip, media) ua
+        LEFT JOIN tmdb_meta tm ON tm.movie_id = COALESCE(NULLIF(rs.movie_id,0), en.movie_id)
+        LEFT JOIN (SELECT ip, media, MAX(ts) t, ua FROM events WHERE ua != '' GROUP BY ip, media) ua
                ON ua.ip = rs.ip AND ua.media = rs.media
         ORDER BY rs.ts DESC
         LIMIT " . (int) $limit;

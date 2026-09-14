@@ -23,18 +23,16 @@ RUN sed -i '/<Directory \/var\/www\/>/,/<\/Directory>/ s/AllowOverride None/Allo
 RUN echo "Timeout 3600" >> /etc/apache2/apache2.conf
 
 # Create custom PHP configuration for performance, timeouts, and uploads
-RUN cat << 'INICONTENT' > /usr/local/etc/php/conf.d/custom-php.ini
-upload_max_filesize=20M
-post_max_size=25M
-max_execution_time=3600
-max_input_time=3600
-opcache.enable=1
-opcache.memory_consumption=128
-opcache.interned_strings_buffer=8
-opcache.max_accelerated_files=10000
-opcache.revalidate_freq=2
-opcache.fast_shutdown=1
-INICONTENT
+RUN echo "upload_max_filesize=20M" > /usr/local/etc/php/conf.d/custom-php.ini && \
+    echo "post_max_size=25M" >> /usr/local/etc/php/conf.d/custom-php.ini && \
+    echo "max_execution_time=3600" >> /usr/local/etc/php/conf.d/custom-php.ini && \
+    echo "max_input_time=3600" >> /usr/local/etc/php/conf.d/custom-php.ini && \
+    echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/custom-php.ini && \
+    echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/custom-php.ini && \
+    echo "opcache.interned_strings_buffer=8" >> /usr/local/etc/php/conf.d/custom-php.ini && \
+    echo "opcache.max_accelerated_files=10000" >> /usr/local/etc/php/conf.d/custom-php.ini && \
+    echo "opcache.revalidate_freq=2" >> /usr/local/etc/php/conf.d/custom-php.ini && \
+    echo "opcache.fast_shutdown=1" >> /usr/local/etc/php/conf.d/custom-php.ini
 
 # Set working directory
 WORKDIR /var/www/html

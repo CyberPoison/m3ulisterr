@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  php-app:
+    build: .
+    container_name: tmdb-vod-php
+    ports:
+      - "8080:80"
+    volumes:
+      - .:/var/www/html
+      - sessions:/var/www/html/sessions
+      - videos:/var/www/html/videos
+      - channels:/var/www/html/channels
+    environment:
+      - HEADLESSVIDX_ADDRESS=xxxx.xxxx.xxxx:xxx
+      - PHP_MEMORY_LIMIT=1024M
+    # /dev/shm backs the HLS segment/init RAM cache (see getRamCacheDir() in
+    # hls_shared.php) - Docker's default is only 64MB, which can't even hold
+    # one segment of a high-bitrate remux (a 90Mbps title needs ~120MB just
+    # for its own cache budget). This is a ceiling, not a reservation - tmpfs
+    # only uses actual host RAM for what's currently written into it, and the
+    # application enforces its own smaller per-title budget well under this,
+    # so raising it doesn't pre-commit memory. Increase further if you expect
+    # many concurrent high-bitrate streams; lower it if host RAM is tight.
+    shm_size: '1gb'
+    restart: unless-stopped
+
+volumes:
+  sessions:
+  videos:
+  channels:

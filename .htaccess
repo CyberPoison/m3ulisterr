@@ -1,0 +1,76 @@
+RewriteEngine On
+RewriteBase /
+
+# --- M3uListerr security blocks (rewrite-based: works even where AllowOverride
+#     forbids Require/Files directives, which would 500 the whole site) --------
+#
+# The private analytics data directory: SQLite DB, sessions, event logs,
+# install secret. Nothing under it is ever web-served.
+RewriteRule ^m3ulisterr_data(/|$) - [F,L]
+# Vendored dashboard libraries are streamed by dashboard.php after login only.
+RewriteRule ^m3ulisterr_assets(/|$) - [F,L]
+# Dashboard internals must not be requested as their own URLs (they also
+# self-guard in PHP, but block them at the edge too).
+RewriteRule ^m3ulisterr_(lib|api|view)\.php$ - [F,L]
+# Version control metadata - was fully downloadable, exposing history and every
+# secret ever committed. Block the whole tree.
+RewriteRule (^|/)\.git(/|$) - [F,L]
+# Operational data that leaked before: resolver cache, request/debug logs,
+# raw playlist dumps, container config, editor backups.
+RewriteRule ^(cache\.json|access\.log|detailed_log\.html|docker-compose\.ya?ml)$ - [F,L]
+RewriteRule \.(log|sqlite|sqlite3|db)$ - [F,L]
+RewriteRule ^(movies_2024_2026_raw_cache|adult-movies)\.json$ - [F,L]
+RewriteRule ^xtreamcodesapitom3u$ - [F,L]
+RewriteRule \.(bak|old|orig|save|swp|tmp|m3utmp)$ - [F,L]
+# VLC / player debug captures dropped in the web root.
+RewriteRule (?i)vlc.debug.log - [F,L]
+# Include-only PHP: these are require()'d server-side and are never valid as
+# their own URL. They execute to an empty page today (so no source leaks while
+# PHP is healthy), but blocking direct access is defence-in-depth for the day a
+# misconfiguration stops PHP from running and would otherwise serve raw source
+# containing every API key and token.
+RewriteRule ^(config|hls_shared)\.php$ - [F,L]
+# --- end M3uListerr security blocks -----------------------------------------
+
+# Deny access to specific extensions for movie, series, and live URLs (Prevent MX Player's multiple requests)
+RewriteCond %{REQUEST_URI} \.(srt|ssa|ass|sub|smi|txt|idx|mpl|vtt|psb|sami|pjs|sup)$ [NC]
+RewriteRule ^(movie|series|live)/ - [R=404,L]
+
+# For movies
+RewriteCond %{REQUEST_URI} ^(.*/)(movie/.*)
+RewriteRule ^movie/([^/]+)/[^/]+/([0-9]+) %1play.php?movieId=$2&username=$1 [QSA,R=302,L]
+
+# For series
+RewriteCond %{REQUEST_URI} ^(.*/)(series/.*)
+RewriteRule ^series/([^/]+)/[^/]+/([0-9]+)\.(.+)$ %1play.php?type=series&movieId=$2&data=$3&username=$1 [QSA,R=302,L]
+
+# For live
+RewriteCond %{REQUEST_URI} ^(.*/)(live/.*)
+RewriteRule ^live/.*/([0-9]+)\.[a-z0-9]+$ %1live_play.php?streamId=$1 [R=302,L]
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+# Match the URL pattern where the last segment is purely numeric
+RewriteRule ^(.*)/([0-9]+)$ %1/live_play.php?streamId=$2 [R=302,L]
+
+# For Live M3U8 Playlist
+RewriteCond %{REQUEST_URI} ^(.*/)(tv\.m3u8)
+RewriteRule ^tv\.m3u8$ %1player_api.php?action=get_live_streams&type=m3u8 [R=302,L]
+
+# For Movies M3U8 Playlist
+RewriteCond %{REQUEST_URI} ^(.*/)(movies\.m3u8)
+RewriteRule ^movies\.m3u8$ %1player_api.php?action=get_vod_streams&type=m3u8 [R=302,L]
+
+# Subtitle-track HLS playlists/segments: give each URL a real .m3u8/.ts
+# extension (rather than a bare .php with query params) so players select
+# their HLS demuxer from the URL itself rather than relying purely on
+# Content-Type sniffing after the fact.
+RewriteRule ^subtitle_track_playlist\.m3u8$ subtitle_track_playlist.php [QSA,L]
+RewriteRule ^subtitle_video_playlist\.m3u8$ subtitle_video_playlist.php [QSA,L]
+RewriteRule ^subtitle_video_init\.mp4$ subtitle_video_init.php [QSA,L]
+RewriteRule ^subtitle_video_segment\.m4s$ subtitle_video_segment.php [QSA,L]
+RewriteRule ^subtitle_audio_playlist\.m3u8$ subtitle_audio_playlist.php [QSA,L]
+RewriteRule ^subtitle_audio_init\.mp4$ subtitle_audio_init.php [QSA,L]
+RewriteRule ^subtitle_audio_segment\.m4s$ subtitle_audio_segment.php [QSA,L]
+RewriteRule ^subtitle_vtt_playlist\.m3u8$ subtitle_vtt_playlist.php [QSA,L]
+RewriteRule ^subtitle_vtt_segment\.vtt$ subtitle_vtt_segment.php [QSA,L]

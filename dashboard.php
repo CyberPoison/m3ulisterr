@@ -146,6 +146,26 @@ function m3uMigrate(PDO $db): void {
     $db->exec('CREATE TABLE IF NOT EXISTS cache_entries (
         cache_key TEXT PRIMARY KEY, value TEXT, added INTEGER, expires INTEGER, status TEXT
     )');
+    // Durable resolved-stream cache - the source of truth that survives deploys
+    // (cache.json is only the temporary hot layer). Written by play.php via
+    // m3uCacheStore(); mirrors the schema created in m3ulisterr_lib.php.
+    $db->exec('CREATE TABLE IF NOT EXISTS resolved_cache (
+        cache_key TEXT PRIMARY KEY, value TEXT, status TEXT, added INTEGER, expires INTEGER,
+        prewarmed INTEGER DEFAULT 0, movie_id INTEGER, username TEXT, lang TEXT, media_type TEXT, updated INTEGER
+    )');
+}
+
+// Absolute path to the temporary hot cache file this app uses.
+function m3uCacheJsonPath(): string {
+    return __DIR__ . '/cache.json';
+}
+function m3uCacheJsonStatus(): array {
+    $p = m3uCacheJsonPath();
+    if (!is_file($p)) {
+        return ['exists' => false, 'count' => 0];
+    }
+    $d = json_decode((string) @file_get_contents($p), true);
+    return ['exists' => true, 'count' => is_array($d) ? count($d) : 0];
 }
 
 function m3uKvGet(PDO $db, string $k, $default = null) {
@@ -321,33 +341,13 @@ function m3uImportEvents(PDO $db): int {
     return $imported;
 }
 
+// NOTE: cache.json is deliberately NOT imported back into SQLite. play.php
+// writes resolved/failed entries straight into resolved_cache (the source of
+// truth), and cache.json is only ever rebuilt FROM that table. Importing
+// cache.json here would create the rebuild -> import -> rebuild loop the
+// operator asked to avoid, so this step is intentionally a no-op.
 function m3uImportCache(PDO $db): int {
-    $file = __DIR__ . '/cache.json';
-    if (!is_file($file)) {
-        return 0;
-    }
-    $data = json_decode((string) @file_get_contents($file), true);
-    if (!is_array($data)) {
-        return 0;
-    }
-    $db->beginTransaction();
-    $db->exec('DELETE FROM cache_entries');
-    $ins = $db->prepare('INSERT OR REPLACE INTO cache_entries (cache_key, value, added, expires, status) VALUES (?,?,?,?,?)');
-    $n = 0;
-    foreach ($data as $key => $row) {
-        $value = json_decode($row['value'] ?? 'null', true);
-        $status = $value === '_failed_' ? 'failed' : ($value === '_running_' ? 'running' : 'resolved');
-        $ins->execute([
-            (string) $key,
-            is_string($value) ? $value : json_encode($value),
-            (int) ($row['addedTime'] ?? 0),
-            (int) ($row['expirationTime'] ?? 0),
-            $status,
-        ]);
-        $n++;
-    }
-    $db->commit();
-    return $n;
+    return 0;
 }
 
 // Geolocate any viewer IP not looked up yet, via ip-api.com's batch endpoint
@@ -569,6 +569,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json');
         echo json_encode(m3uSaveConfig($_POST['settings'] ?? []));
         exit;
+    } elseif ($action === 'rebuild_cache') {
+        if (!m3uIsLoggedIn()) { http_response_code(403); exit; }
+        m3uCheckCsrf();
+        header('Content-Type: application/json');
+        // Recreate the temporary cache.json from the durable SQLite store.
+        $written = m3uCacheRebuildJson(m3uCacheJsonPath());
+        echo json_encode($written >= 0
+            ? ['ok' => true, 'written' => $written]
+            : ['ok' => false, 'error' => 'rebuild failed (no durable store or not writable)']);
+        exit;
     }
 }
 
@@ -588,8 +598,10 @@ if ($action === 'api') {
 // Config editor (safe, allow-listed scalar settings)
 // ===========================================================================
 function m3uEditableConfig(): array {
-    // key => [label, type]. Only these are editable through the dashboard;
-    // secrets and code are never rendered back to the browser.
+    // key => [label, type, secret?]. Editable through the dashboard (admin-only,
+    // behind login + CSP). 'secret' fields carry live credentials - the operator
+    // asked to manage them here; they are only ever sent to an authenticated
+    // admin, never to a public page.
     return [
         'maxResolution' => ['Max resolution (px)', 'int'],
         'expirationHours' => ['Cache expiry (hours)', 'int'],
@@ -599,9 +611,21 @@ function m3uEditableConfig(): array {
         'maxFileSize' => ['Max file size (MB)', 'int'],
         'usePremiumize' => ['Use Premiumize', 'bool'],
         'useRealDebrid' => ['Use Real-Debrid', 'bool'],
+        'useAllDebrid' => ['Use AllDebrid', 'bool'],
+        'useTorBox' => ['Use TorBox', 'bool'],
         'INCLUDE_ADULT_VOD' => ['Include adult VOD', 'bool'],
         'userCreatePlaylist' => ['Build own playlist', 'bool'],
         'language' => ['TMDB language', 'str'],
+        'HeadlessVidX_Address' => ['HeadlessVidX address', 'str'],
+        // Credentials / URLs (admin-only)
+        'apiKey' => ['TMDB API key', 'str', true],
+        'frenchAioStreamsUrl' => ['AIOStreams base URL', 'str', true],
+        'premiumizeApiKey' => ['Premiumize API key (single)', 'str', true],
+        'PRIVATE_TOKEN' => ['Real-Debrid token (single)', 'str', true],
+        'alldebridApiKey' => ['AllDebrid API key (single)', 'str', true],
+        'torboxApiKey' => ['TorBox API key (single)', 'str', true],
+        'openSubtitlesApiKey' => ['OpenSubtitles API key', 'str', true],
+        'openSubtitlesApiToken' => ['OpenSubtitles token', 'str', true],
     ];
 }
 function m3uReadConfigValues(): array {

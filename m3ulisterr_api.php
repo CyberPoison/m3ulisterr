@@ -174,8 +174,12 @@ function m3uApi(PDO $db, string $q): array {
             $resolves = (int) $db->query("SELECT COUNT(*) c FROM events WHERE type='resolve'")->fetch()['c'];
             $uniqueIps = (int) $db->query("SELECT COUNT(DISTINCT ip) c FROM events WHERE ip != ''")->fetch()['c'];
             $countries = (int) $db->query("SELECT COUNT(DISTINCT country_code) c FROM geo WHERE country_code != ''")->fetch()['c'];
-            $failed = (int) $db->query("SELECT COUNT(*) c FROM cache_entries WHERE status='failed'")->fetch()['c'];
-            $resolvedCache = (int) $db->query("SELECT COUNT(*) c FROM cache_entries WHERE status='resolved'")->fetch()['c'];
+            // Durable SQLite cache (source of truth), not the temporary cache.json snapshot.
+            $now = time();
+            $failed = (int) $db->query("SELECT COUNT(*) c FROM resolved_cache WHERE status='failed'")->fetch()['c'];
+            $resolvedCache = (int) $db->query("SELECT COUNT(*) c FROM resolved_cache WHERE status='resolved' AND expires > $now")->fetch()['c'];
+            $prewarmedCount = (int) $db->query("SELECT COUNT(*) c FROM resolved_cache WHERE prewarmed=1 AND status='resolved' AND expires > $now")->fetch()['c'];
+            $cacheJson = m3uCacheJsonStatus();
             $avgResolve = $db->query("SELECT AVG(resolve_ms) a FROM events WHERE type='resolve' AND resolve_ms IS NOT NULL AND cache_hit=0")->fetch()['a'];
             $avgDeliver = $db->query("SELECT AVG(deliver_ms) a FROM events WHERE type='segment' AND outcome='success'")->fetch()['a'];
 
@@ -206,9 +210,11 @@ function m3uApi(PDO $db, string $q): array {
                     'countries' => $countries,
                     'failedCache' => $failed,
                     'resolvedCache' => $resolvedCache,
+                    'prewarmedCount' => $prewarmedCount,
                     'avgResolveMs' => $avgResolve ? round((float) $avgResolve) : null,
                     'avgDeliverMs' => $avgDeliver ? round((float) $avgDeliver) : null,
                 ],
+                'cacheJson' => $cacheJson,
                 'charts' => [
                     'debrid' => m3uCountBy($sessions, 'debrid'),
                     'provider' => m3uCountBy($sessions, 'provider'),
@@ -231,8 +237,41 @@ function m3uApi(PDO $db, string $q): array {
             return ['ok' => true, 'fields' => m3uEditableConfig(), 'values' => m3uReadConfigValues()];
 
         case 'cache':
-            $rows = $db->query("SELECT * FROM cache_entries ORDER BY added DESC LIMIT 500")->fetchAll();
-            return ['ok' => true, 'entries' => $rows];
+            // Durable SQLite store (survives deploys), enriched with title/poster.
+            $rows = $db->query("
+                SELECT rc.cache_key, rc.value, rc.status, rc.added, rc.expires, rc.prewarmed,
+                       rc.movie_id, rc.username, rc.lang, rc.media_type,
+                       tm.title, tm.year, tm.poster
+                FROM resolved_cache rc
+                LEFT JOIN tmdb_meta tm ON tm.movie_id = rc.movie_id
+                ORDER BY rc.updated DESC LIMIT 800")->fetchAll();
+            foreach ($rows as &$r) {
+                $r['poster_url'] = !empty($r['poster']) ? ('https://image.tmdb.org/t/p/w92' . $r['poster']) : '';
+                $r['is_series'] = ($r['media_type'] === 'series');
+                $r['expired'] = ((int) $r['expires']) <= time();
+            }
+            unset($r);
+            return ['ok' => true, 'entries' => $rows, 'cacheJson' => m3uCacheJsonStatus()];
+
+        case 'prewarmed':
+            $now = time();
+            $rows = $db->query("
+                SELECT rc.cache_key, rc.value, rc.status, rc.added, rc.expires,
+                       rc.movie_id, rc.username, rc.lang, rc.media_type,
+                       tm.title, tm.year, tm.poster, tm.overview
+                FROM resolved_cache rc
+                LEFT JOIN tmdb_meta tm ON tm.movie_id = rc.movie_id
+                WHERE rc.prewarmed=1
+                ORDER BY rc.updated DESC LIMIT 500")->fetchAll();
+            foreach ($rows as &$r) {
+                $r['poster_url'] = !empty($r['poster']) ? ('https://image.tmdb.org/t/p/w154' . $r['poster']) : '';
+                $r['is_series'] = ($r['media_type'] === 'series');
+                $r['kind_label'] = $r['is_series'] ? 'TV' : 'Movie';
+                $r['expired'] = ((int) $r['expires']) <= $now;
+                $r['fresh'] = !$r['expired'] && $r['status'] === 'resolved';
+            }
+            unset($r);
+            return ['ok' => true, 'entries' => $rows, 'cacheJson' => m3uCacheJsonStatus()];
 
         default:
             return ['ok' => false, 'error' => 'unknown query'];

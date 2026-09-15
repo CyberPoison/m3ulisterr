@@ -23,6 +23,29 @@ $PRIVATE_TOKEN = '';
 // Don't worry about this setting if you aren't planning on using Premiumize.
 $premiumizeApiKey = '';
 
+// Replace this with your AllDebrid API key - https://alldebrid.com/apikeys/
+// Don't worry about this setting if you aren't planning on using AllDebrid.
+$alldebridApiKey = '';
+
+// Replace this with your TorBox API key - https://torbox.app/settings (API)
+// Don't worry about this setting if you aren't planning on using TorBox.
+$torboxApiKey = '';
+
+// ── Multiple debrid API keys per service (optional) ──────────────────────
+// Each service may hold as MANY keys as you like. When one key hits its
+// quota / fair-use / hoster limit, the resolver automatically falls back to
+// the next key for that service (see debridKeysFor() / debridApiRequest()
+// in debrid.php). Leave a service's list empty to disable it. The single-key
+// settings above ($PRIVATE_TOKEN, $premiumizeApiKey, $alldebridApiKey,
+// $torboxApiKey) are still honoured and are merged in FIRST, so you can use
+// either style. Example: 'alldebrid' => ['key_a', 'key_b', 'key_c'].
+$debridApiKeys = [
+    'realdebrid' => [],   // Real-Debrid private tokens
+    'premiumize' => [],   // Premiumize API keys
+    'alldebrid'  => [],   // AllDebrid API keys
+    'torbox'     => [],   // TorBox API keys
+];
+
 // By default, on a local network the server identifies as "localhost" or "127.0.0.1" which isn't
 // accessible from other devices in your local network. Set this if you're running the script on
 // a local server and want to access it from other devices (firestick, android, etc. If so, specify
@@ -66,9 +89,17 @@ $movies_with_origin_country = 'US'; // TMDB search setting (with_origin_country)
 $useRealDebrid = false; // Requires a real debrid private token added above.
 
 // Leave this setting as false if you aren't intending on using Premiumize links.
-// set it to true if you want to use premiumize when streaming torrents. 
+// set it to true if you want to use premiumize when streaming torrents.
 // Example: The value can be either true or false.
 $usePremiumize = true; // Requires a Premiumize API Key added above.
+
+// Enable AllDebrid on the torrent (torrentSites) resolve path. Requires at
+// least one AllDebrid key ($alldebridApiKey or $debridApiKeys['alldebrid']).
+$useAllDebrid = false;
+
+// Enable TorBox on the torrent (torrentSites) resolve path. Requires at least
+// one TorBox key ($torboxApiKey or $debridApiKeys['torbox']).
+$useTorBox = false;
 
 // maxResolution is the upper limit for video resolution preference in
 // pixels (e.g., 1080 for 1080p). If no links match this exact resolution,

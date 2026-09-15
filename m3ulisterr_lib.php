@@ -25,7 +25,18 @@ function m3uDataDir() {
     }
 
     $dir = false;
-    foreach ([dirname(__DIR__) . '/m3ulisterr_data', __DIR__ . '/m3ulisterr_data'] as $candidate) {
+    // A persistent location survives deploys/redeploys - important now that the
+    // SQLite database (not just cache.json) is the durable store. Set
+    // M3U_DATA_DIR to a mounted volume in production (see docker-compose.yml);
+    // otherwise fall back to a directory beside the app.
+    $envDir = getenv('M3U_DATA_DIR');
+    $candidates = [];
+    if (is_string($envDir) && $envDir !== '') {
+        $candidates[] = rtrim($envDir, '/');
+    }
+    $candidates[] = dirname(__DIR__) . '/m3ulisterr_data';
+    $candidates[] = __DIR__ . '/m3ulisterr_data';
+    foreach ($candidates as $candidate) {
         if (is_dir($candidate)) {
             if (is_writable($candidate)) {
                 $dir = $candidate;
@@ -99,6 +110,155 @@ function m3uPath($kind) {
             return $dir . '/backups-' . $tag;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Durable resolved-stream cache (SQLite)
+//
+// cache.json is the fast, temporary hot layer and is wiped on every deploy.
+// SQLite is the durable source of truth: every resolved stream URL (and every
+// prewarmed title) is also written here, so after a deploy the hot cache can be
+// rebuilt from it instead of every title paying the ~13s AIOStreams cold
+// resolve again. The dashboard reads this table and can rebuild cache.json on
+// demand; play.php rebuilds it automatically when it finds cache.json missing.
+// ---------------------------------------------------------------------------
+
+// Opens the shared SQLite DB and ensures the resolved_cache table exists.
+// Returns a PDO, or null on any failure - callers on the hot path must treat a
+// null as "just use cache.json", never as an error.
+function m3uCacheDb() {
+    static $db = false; // false = not yet tried, null = tried and failed
+    if ($db !== false) {
+        return $db;
+    }
+    $db = null;
+    try {
+        $path = m3uPath('db');
+        if ($path === false) {
+            return $db;
+        }
+        $pdo = new PDO('sqlite:' . $path, null, null, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_TIMEOUT => 5,
+        ]);
+        @chmod($path, 0600);
+        $pdo->exec('PRAGMA journal_mode=WAL');
+        $pdo->exec('PRAGMA busy_timeout=5000');
+        $pdo->exec('CREATE TABLE IF NOT EXISTS resolved_cache (
+            cache_key TEXT PRIMARY KEY,
+            value TEXT,
+            status TEXT,
+            added INTEGER,
+            expires INTEGER,
+            prewarmed INTEGER DEFAULT 0,
+            movie_id INTEGER,
+            username TEXT,
+            lang TEXT,
+            media_type TEXT,
+            updated INTEGER
+        )');
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_rc_prewarmed ON resolved_cache(prewarmed)');
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_rc_expires ON resolved_cache(expires)');
+        $db = $pdo;
+    } catch (Throwable $e) {
+        $db = null;
+    }
+    return $db;
+}
+
+// Derives the TMDB id from a cache key like "157336_tmdb_url",
+// "157336_fr_tmdb_url" or "157336_series_s01e01_url".
+function m3uCacheKeyMovieId($key) {
+    return preg_match('/^(\d+)_/', (string) $key, $m) ? (int) $m[1] : null;
+}
+
+// Persists one resolved cache entry to SQLite. Called from writeToCache after
+// the cache.json write. Skips the transient "_running_" marker. Fail-safe.
+function m3uCacheStore($key, $value, $expirationTime) {
+    try {
+        if ($value === '_running_') {
+            return;
+        }
+        $db = m3uCacheDb();
+        if ($db === null) {
+            return;
+        }
+        $status = ($value === '_failed_') ? 'failed' : 'resolved';
+        // Only a genuine resolve or a failure marker is worth persisting.
+        if ($status === 'resolved' && (!is_string($value) || $value === '')) {
+            return;
+        }
+        $prewarmed = (isset($_GET['prewarm']) && $_GET['prewarm'] !== '0') ? 1 : 0;
+        // A real play must never demote a prewarmed row's flag; keep the max.
+        $st = $db->prepare('INSERT INTO resolved_cache
+            (cache_key, value, status, added, expires, prewarmed, movie_id, username, lang, media_type, updated)
+            VALUES (:k,:v,:s,:a,:e,:p,:mid,:u,:l,:mt,:up)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                value=excluded.value, status=excluded.status, added=excluded.added,
+                expires=excluded.expires, prewarmed=MAX(resolved_cache.prewarmed, excluded.prewarmed),
+                movie_id=excluded.movie_id, username=excluded.username, lang=excluded.lang,
+                media_type=excluded.media_type, updated=excluded.updated');
+        $st->execute([
+            ':k' => $key,
+            ':v' => is_string($value) ? $value : json_encode($value),
+            ':s' => $status,
+            ':a' => time(),
+            ':e' => (int) $expirationTime,
+            ':p' => $prewarmed,
+            ':mid' => m3uCacheKeyMovieId($key),
+            ':u' => $_GET['username'] ?? '',
+            ':l' => $GLOBALS['requestedLang'] ?? '',
+            ':mt' => (strpos((string) $key, '_series_') !== false) ? 'series' : 'movie',
+            ':up' => time(),
+        ]);
+    } catch (Throwable $e) {
+        // Never let cache persistence break a resolve.
+    }
+}
+
+// Rebuilds cache.json from the durable SQLite rows that are still valid.
+// Returns the number of entries written, or -1 on failure. Used by play.php
+// (auto, when cache.json is missing) and the dashboard (manual button).
+function m3uCacheRebuildJson($cacheFilePath) {
+    try {
+        $db = m3uCacheDb();
+        if ($db === null) {
+            return -1;
+        }
+        $now = time();
+        // ONLY 'resolved' entries are rebuilt into cache.json - never 'failed'
+        // (dashboard-only, informational) and never '_running_' (transient). This
+        // is the single direction of flow: SQLite resolved -> cache.json. cache.json
+        // is never imported back into SQLite, so there is no rebuild/import loop.
+        $rows = $db->query("SELECT cache_key, value, added, expires FROM resolved_cache WHERE status = 'resolved' AND expires > " . $now)->fetchAll();
+        $cache = [];
+        foreach ($rows as $r) {
+            // cache.json stores the value JSON-encoded (see writeToCache).
+            $cache[$r['cache_key']] = [
+                'value' => json_encode($r['value']),
+                'addedTime' => (int) $r['added'],
+                'expirationTime' => (int) $r['expires'],
+            ];
+        }
+        $tmp = $cacheFilePath . '.rebuild.' . getmypid();
+        if (@file_put_contents($tmp, json_encode($cache)) === false) {
+            return -1;
+        }
+        @rename($tmp, $cacheFilePath);
+        return count($cache);
+    } catch (Throwable $e) {
+        return -1;
+    }
+}
+
+// If cache.json is missing (e.g. right after a deploy), recreate it from
+// SQLite so the very next resolve is a hot cache hit instead of a cold
+// AIOStreams round-trip. Cheap no-op when cache.json already exists.
+function m3uCacheEnsureJson($cacheFilePath) {
+    if (!file_exists($cacheFilePath)) {
+        m3uCacheRebuildJson($cacheFilePath);
+    }
 }
 
 function m3uClientIp() {

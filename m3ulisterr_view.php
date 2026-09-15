@@ -176,6 +176,7 @@ endif;
       <a data-sec="globe"><span class="ic">◐</span> Globe</a>
       <a data-sec="sessions"><span class="ic">▤</span> Sessions</a>
       <a data-sec="movies"><span class="ic">▦</span> Titles</a>
+      <a data-sec="prewarmed"><span class="ic">⚡</span> Prewarmed</a>
       <a data-sec="cache"><span class="ic">▣</span> Cache</a>
       <a data-sec="config"><span class="ic">⚙</span> Config</a>
       <a data-sec="account"><span class="ic">◈</span> Account</a>
@@ -198,6 +199,7 @@ endif;
     </div>
 
     <section class="sec on" data-sec="overview">
+      <div id="ovBanner"></div>
       <div class="cards" id="statCards"><div class="spin">Loading…</div></div>
       <div class="grid2">
         <div class="panel"><h3>Debrid service used <span>per session</span></h3><div id="chDebrid"></div></div>
@@ -231,8 +233,20 @@ endif;
       <div class="panel"><h3>Most requested movies &amp; TV shows</h3><div class="grid-movies" id="movieGrid"></div></div>
     </section>
 
+    <section class="sec" data-sec="prewarmed">
+      <div id="cacheBanner"></div>
+      <div class="panel"><h3>Prewarmed content <span id="prewarmCount"></span></h3>
+        <p class="muted" style="margin-bottom:14px">Titles resolved ahead of time so the first viewer play is instant. Green = still fresh in the durable store; grey = expired (will re-warm on the next prewarm run).</p>
+        <div class="grid-movies" id="prewarmGrid"></div>
+      </div>
+    </section>
+
     <section class="sec" data-sec="cache">
-      <div class="panel"><h3>cache.json entries</h3><div class="tablewrap"><table class="tabtable" id="cacheTable"></table></div></div>
+      <div id="cacheBanner2"></div>
+      <div class="panel"><h3>Durable cache <span>SQLite — survives deploys</span></h3>
+        <p class="muted" style="margin-bottom:14px">Every resolved stream is stored here (the source of truth). <code>cache.json</code> is only the temporary hot layer and is rebuilt from this after a deploy.</p>
+        <div class="tablewrap"><table class="tabtable" id="cacheTable"></table></div>
+      </div>
     </section>
 
     <section class="sec" data-sec="config">
@@ -280,6 +294,7 @@ document.querySelectorAll('.nav a').forEach(a=>a.addEventListener('click',()=>{
   if(sec==='globe') drawGlobe();
   if(sec==='sessions') loadSessions();
   if(sec==='cache') loadCache();
+  if(sec==='prewarmed') loadPrewarmed();
   if(sec==='config') loadConfig();
 }));
 
@@ -298,8 +313,11 @@ async function loadOverview(){
   const cards=[['Sessions',s.sessions],['Resolves',s.resolves],['Unique IPs',s.uniqueIps],
     ['Countries',s.countries],['Avg resolve',s.avgResolveMs!=null?s.avgResolveMs+' ms':'—'],
     ['Avg segment',s.avgDeliverMs!=null?s.avgDeliverMs+' ms':'—'],
-    ['Resolved cache',s.resolvedCache],['Failed cache',s.failedCache]];
+    ['Durable cache',s.resolvedCache],['Prewarmed',s.prewarmedCount!=null?s.prewarmedCount:'—']];
   $('#statCards').innerHTML=cards.map(c=>`<div class="stat"><div class="n">${esc(c[1])}</div><div class="l">${esc(c[0])}</div></div>`).join('');
+  // cache.json health banner on the overview when it's missing/empty.
+  if(d.cacheJson && (!d.cacheJson.exists || d.cacheJson.count===0)) renderCacheBanner(d.cacheJson,'ovBanner');
+  else { const ob=$('#ovBanner'); if(ob) ob.innerHTML=''; }
   barChart($('#chDebrid'),d.charts.debrid);
   barChart($('#chCountry'),d.charts.country);
   barChart($('#chDevice'),d.charts.device);
@@ -355,26 +373,73 @@ async function loadSessions(){
   $('#sessTable').innerHTML=head+'<tbody>'+rows+'</tbody>';
 }
 
+// Shows cache.json status + a rebuild button into any element id given.
+function renderCacheBanner(cj, elId){
+  const el=$('#'+elId); if(!el)return;
+  const missing = !cj || !cj.exists || cj.count===0;
+  el.innerHTML=`<div class="panel" style="margin-bottom:16px;border-color:${missing?'var(--warn)':'var(--line)'}">
+    <div class="rowflex" style="justify-content:space-between">
+      <div>cache.json (hot layer): <b>${cj&&cj.exists?(cj.count+' entries'):'MISSING'}</b>
+        ${missing?'<span class="chip" style="background:rgba(255,184,77,.16);border-color:rgba(255,184,77,.4);color:#ffd9a3">rebuild recommended</span>':''}
+        <br><span class="muted">The durable SQLite store is the source of truth; rebuild regenerates cache.json from it (e.g. after a deploy).</span></div>
+      <button class="btn sm" id="${elId}Btn">↻ Recreate cache.json</button>
+    </div><div id="${elId}Msg"></div></div>`;
+  $('#'+elId+'Btn').addEventListener('click',async()=>{
+    $('#'+elId+'Btn').textContent='↻ Rebuilding…';
+    const r=await post('rebuild_cache',{});
+    $('#'+elId+'Msg').innerHTML=r.ok?`<div class="ok">Rebuilt cache.json with ${r.written} entr${r.written===1?'y':'ies'} from SQLite.</div>`:`<div class="err">${esc(r.error||'Failed')}</div>`;
+    loadOverview();
+    if(document.querySelector('.sec.on').dataset.sec==='cache') loadCache();
+    if(document.querySelector('.sec.on').dataset.sec==='prewarmed') loadPrewarmed();
+  });
+}
+
 async function loadCache(){
   const d=await api('cache'); if(!d.ok)return;
-  const head=`<thead><tr><th>Key</th><th>Status</th><th>Value</th><th>Added</th><th>Expires</th></tr></thead>`;
-  $('#cacheTable').innerHTML=head+'<tbody>'+d.entries.map(e=>`<tr>
+  renderCacheBanner(d.cacheJson,'cacheBanner2');
+  const head=`<thead><tr><th>Title</th><th>Type</th><th>Key</th><th>Status</th><th>Account</th><th>Lang</th><th>Value</th><th>Added</th><th>Expires</th></tr></thead>`;
+  $('#cacheTable').innerHTML=head+'<tbody>'+d.entries.map(e=>{
+    const poster=e.poster_url?`<img class="poster" style="width:32px;height:48px" src="${esc(e.poster_url)}" loading="lazy">`:'';
+    const st=e.expired?'<span class="chip">expired</span>':(e.status==='failed'?'<span class="chip">failed</span>':'<span class="chip ad">resolved</span>');
+    return `<tr>
+    <td><div class="movie-cell">${poster}<span class="mt">${esc(e.title||('#'+(e.movie_id||'')))}</span></div></td>
+    <td><span class="chip ${e.is_series?'tv':'mv'}">${e.is_series?'TV':'Movie'}</span></td>
     <td class="mono">${esc(e.cache_key)}</td>
-    <td><span class="chip ${e.status==='failed'?'':(e.status==='resolved'?'ad':'')}">${esc(e.status)}</span></td>
-    <td class="mono" style="max-width:340px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(e.value)}">${esc(e.value)}</td>
+    <td>${st}${e.prewarmed==1?' <span class="chip pm">⚡ prewarmed</span>':''}</td>
+    <td>${esc(e.username||'')}</td><td>${esc(e.lang||'')}</td>
+    <td class="mono" style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(e.value)}">${esc(e.value)}</td>
     <td class="muted">${e.added?new Date(e.added*1000).toLocaleString():''}</td>
     <td class="muted">${e.expires?new Date(e.expires*1000).toLocaleString():''}</td>
-  </tr>`).join('')+'</tbody>';
+  </tr>`;}).join('')+'</tbody>';
+}
+
+async function loadPrewarmed(){
+  const d=await api('prewarmed'); if(!d.ok)return;
+  renderCacheBanner(d.cacheJson,'cacheBanner');
+  $('#prewarmCount').textContent=d.entries.length+' entries';
+  const g=$('#prewarmGrid');
+  if(!d.entries.length){g.innerHTML='<div class="muted">Nothing prewarmed yet. Run prewarm.php (or enable the Docker cron) to warm titles.</div>';return;}
+  g.innerHTML=d.entries.map(e=>`<div class="mcard" style="${e.fresh?'':'opacity:.55'}">
+    <div class="pl" style="background:${e.fresh?'rgba(55,211,155,.85)':'rgba(0,0,0,.7)'}">${e.fresh?'⚡ fresh':'expired'}</div>
+    ${e.poster_url?`<img src="${esc(e.poster_url)}" loading="lazy">`:'<div style="aspect-ratio:2/3;background:var(--bg2)"></div>'}
+    <div class="mi"><div class="t" title="${esc(e.title||('#'+e.movie_id))}"><span class="chip ${e.is_series?'tv':'mv'}">${esc(e.kind_label)}</span> ${esc(e.title||('#'+e.movie_id))}</div>
+    <div class="my">${esc(e.year||'')} ${esc(e.username||'')}${e.lang?(' · '+esc(e.lang)):''}</div></div>
+  </div>`).join('');
 }
 
 let CONFIG=null;
 async function loadConfig(){
   const d=await api('config'); if(!d.ok)return; CONFIG=d;
   $('#configForm').innerHTML=Object.keys(d.fields).map(k=>{
-    const [label,type]=d.fields[k]; const v=d.values[k];
+    const [label,type,secret]=d.fields[k]; const v=d.values[k];
     if(type==='bool') return `<div class="field toggle"><input type="checkbox" id="cfg_${k}" ${v?'checked':''}><label for="cfg_${k}" style="margin:0;text-transform:none;letter-spacing:0">${esc(label)}</label></div>`;
+    if(secret) return `<div class="field"><label>${esc(label)}</label><div style="display:flex;gap:6px"><input id="cfg_${k}" type="password" autocomplete="off" spellcheck="false" value="${esc(v==null?'':v)}" style="flex:1"><button type="button" class="revealBtn" data-t="cfg_${k}" style="flex:0 0 auto">show</button></div></div>`;
     return `<div class="field"><label>${esc(label)}</label><input id="cfg_${k}" value="${esc(v==null?'':v)}"></div>`;
   }).join('');
+  document.querySelectorAll('.revealBtn').forEach(b=>b.addEventListener('click',()=>{
+    const el=$('#'+b.dataset.t); if(!el)return;
+    if(el.type==='password'){el.type='text';b.textContent='hide';}else{el.type='password';b.textContent='show';}
+  }));
 }
 $('#saveConfig').addEventListener('click',async()=>{
   if(!CONFIG)return;

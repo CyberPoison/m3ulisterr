@@ -11,9 +11,15 @@ services:
       - sessions:/var/www/html/sessions
       - videos:/var/www/html/videos
       - channels:/var/www/html/channels
+      # Durable M3uListerr data (SQLite DB, event log, install secret). MUST be
+      # a persistent volume: it is the source of truth for resolved/prewarmed
+      # content and the dashboard, and unlike cache.json it must survive deploys.
+      - m3ulisterr_data:/data
     environment:
       - HEADLESSVIDX_ADDRESS=xxxx.xxxx.xxxx:xxx
       - PHP_MEMORY_LIMIT=1024M
+      # Where the durable SQLite store + event log live (mounted volume below).
+      - M3U_DATA_DIR=/data
       # ── Prewarmer (optional) ─────────────────────────────────────────
       # Resolves titles ahead of time so the FIRST viewer play is an instant
       # cache hit instead of a ~13s AIOStreams round-trip. DISABLED by default.
@@ -40,3 +46,4 @@ volumes:
   sessions:
   videos:
   channels:
+  m3ulisterr_data:

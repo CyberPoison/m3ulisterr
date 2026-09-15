@@ -8,6 +8,7 @@
 require_once 'libs/JavaScriptUnpacker.php';
 require_once 'config.php';
 require_once 'm3ulisterr_lib.php';
+require_once 'debrid.php';
 accessLog();
 
 
@@ -2348,7 +2349,35 @@ function torrentSites($movieId, $imdbId, $title, $year = null)
             $premTimeDifference = round($premEndTime - $premStartTime, 2);
         }
 
-        if ($returnedPremiumLink !== false) {
+        // Fall back to AllDebrid when the earlier services came up empty.
+        if (empty($returnedPremiumLink)) {
+            if ($usePremiumize === true && $service == 'Premiumize') {
+                $htmlContent .= "<li>Premiumize (0) - $premTimeDifference sec.</li>";
+            }
+            $service = 'AllDebrid';
+        }
+        if ($useAllDebrid === true && $service == 'AllDebrid' && !empty(debridKeysFor('alldebrid'))) {
+            $premStartTime = microtime(true);
+            $returnedPremiumLink = selectHashByPreferences($torrentData, $maxResolution, 'torrentSites', 'AllDebrid');
+            $premEndTime = microtime(true);
+            $premTimeDifference = round($premEndTime - $premStartTime, 2);
+        }
+
+        // Fall back to TorBox when AllDebrid came up empty too.
+        if (empty($returnedPremiumLink)) {
+            if ($useAllDebrid === true && $service == 'AllDebrid') {
+                $htmlContent .= "<li>AllDebrid (0) - $premTimeDifference sec.</li>";
+            }
+            $service = 'TorBox';
+        }
+        if ($useTorBox === true && $service == 'TorBox' && !empty(debridKeysFor('torbox'))) {
+            $premStartTime = microtime(true);
+            $returnedPremiumLink = selectHashByPreferences($torrentData, $maxResolution, 'torrentSites', 'TorBox');
+            $premEndTime = microtime(true);
+            $premTimeDifference = round($premEndTime - $premStartTime, 2);
+        }
+
+        if ($returnedPremiumLink !== false && !empty($returnedPremiumLink)) {
 
             if ($useRealDebrid === true && $service == 'RealDebrid') {
                 $pageUrl = 'https://real-debrid.com/';
@@ -2357,6 +2386,14 @@ function torrentSites($movieId, $imdbId, $title, $year = null)
             if ($usePremiumize === true && $service == 'Premiumize') {
                 $pageUrl = 'https://premiumize.me/';
                 $htmlContent .= "<li>Premiumize ($returnedPremiumLink[1]) - $premTimeDifference sec.</li>";
+            }
+            if ($service == 'AllDebrid') {
+                $pageUrl = 'https://alldebrid.com/';
+                $htmlContent .= "<li>AllDebrid ($returnedPremiumLink[1]) - $premTimeDifference sec.</li>";
+            }
+            if ($service == 'TorBox') {
+                $pageUrl = 'https://torbox.app/';
+                $htmlContent .= "<li>TorBox ($returnedPremiumLink[1]) - $premTimeDifference sec.</li>";
             }
             $htmlContent .= '</div><a href="javascript:void(0);" onclick="openPopup(\'' . $hashedRandomId . '\')">Click to view...</a>';
             logDetails('torrentSites', $htmlContent, 'successful', $GLOBALS['logTitle'], $pageUrl, $returnedPremiumLink[0], $type, $GLOBALS['movieId'], $type === 'series' ? $GLOBALS['seriesCode'] : 'n/a');
@@ -2495,7 +2532,7 @@ function checkLinkStatusCode($url, $verify = false)
 
 function selectHashByPreferences($torrents, $maxResolution, $tSite, $service)
 {
-    global $PRIVATE_TOKEN, $usePremiumize, $useRealDebrid, $seasonNoPad, $type, $season, $episode, $requestedResolutionCodec;
+    global $PRIVATE_TOKEN, $usePremiumize, $useRealDebrid, $useAllDebrid, $useTorBox, $seasonNoPad, $type, $season, $episode, $requestedResolutionCodec, $seriesCode;
 
     // === Filter out DTS ===
     $filteredOutCount = 0;
@@ -2578,6 +2615,22 @@ function selectHashByPreferences($torrents, $maxResolution, $tSite, $service)
                     $getStreamingLinkReturn,
                     $availableCountPremiumize,
                 ];
+            }
+        }
+
+        // === AllDebrid branch (multi-key, see debrid.php) ===
+        elseif ($service === 'AllDebrid') {
+            $adLink = allDebridResolveHash($selectedHash, $type === 'series' ? $seriesCode : '', $type);
+            if ($adLink && resolvedUrlMatchesContentType($adLink, $type, $season, $episode)) {
+                return [$adLink, $initialCount];
+            }
+        }
+
+        // === TorBox branch (multi-key, see debrid.php) ===
+        elseif ($service === 'TorBox') {
+            $tbLink = torBoxResolveHash($selectedHash, $type === 'series' ? $seriesCode : '', $type);
+            if ($tbLink && resolvedUrlMatchesContentType($tbLink, $type, $season, $episode)) {
+                return [$tbLink, $initialCount];
             }
         }
 
@@ -3571,6 +3624,24 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
 
     $batchResults = checkAioStreamsLinksPlayableBatch(array_column($candidates, 'url'));
 
+    // Parallel duration probes for every playable candidate up front, so the
+    // per-candidate ffprobe wait no longer serializes (the main cause of slow
+    // cold resolves). Non-proxy only - proxy mode uses the free size check from
+    // the batch result instead. See batchAioStreamsDurationOk().
+    $durationOk = [];
+    if (!$proxyMode) {
+        $okFinals = [];
+        foreach ($candidates as $c) {
+            $chk = $batchResults[$c['url']] ?? null;
+            if ($chk && $chk['ok'] && !empty($chk['finalUrl'])) {
+                $okFinals[] = $chk['finalUrl'];
+            }
+        }
+        if (!empty($okFinals)) {
+            $durationOk = batchAioStreamsDurationOk($okFinals);
+        }
+    }
+
     foreach ($candidates as $candidate) {
         $url = $candidate['url'];
         $check = $batchResults[$url] ?? ['ok' => false, 'finalUrl' => $url, 'reason' => 'not checked'];
@@ -3588,7 +3659,7 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         // unknown size (0) is let through rather than guessed at.
         $placeholderSuspected = $proxyMode
             ? ($check['totalBytes'] > 0 && $check['totalBytes'] < 20 * 1000 * 1000)
-            : !isAioStreamsLinkDurationOk($check['finalUrl']);
+            : !($durationOk[$check['finalUrl']] ?? true);
         if ($placeholderSuspected) {
             if ($DEBUG) {
                 echo "Rejected (unplayable, implausibly short or small) $label candidate via $tSite: $url</br></br>";
@@ -3898,6 +3969,89 @@ function isAioStreamsLinkDurationOk($finalUrl) {
     // 5 minutes - comfortably below any real movie/episode, safely above the
     // ~2-minute placeholder clip actually observed.
     return !($duration > 0 && $duration < 300);
+}
+
+// Concurrent version of isAioStreamsLinkDurationOk() for many URLs at once.
+// The per-candidate duration probe was the serial cost that made cold resolves
+// slow: each ffprobe can wait up to 10s, and several in a row add up. ffprobe
+// only reads the container header, so running them all in parallel adds
+// negligible debrid traffic while collapsing that wait to a single ~10s window
+// no matter how many candidates there are. The 10MB throughput download stays
+// sequential (see the resolve loop) so it still stops at the first pass and
+// never multiplies debrid usage. Returns [finalUrl => bool] (true = OK/keep).
+function batchAioStreamsDurationOk(array $finalUrls) {
+    static $ffprobePath = null;
+    if ($ffprobePath === null) {
+        $ffprobePath = trim((string) shell_exec('command -v ffprobe 2>/dev/null'));
+    }
+    $results = [];
+    $urls = array_values(array_unique(array_filter($finalUrls)));
+    if (empty($ffprobePath) || empty($urls)) {
+        foreach ($urls as $u) { $results[$u] = true; }
+        return $results;
+    }
+
+    $procs = [];
+    $pipes = [];
+    $out = [];
+    foreach ($urls as $u) {
+        $cmd = [$ffprobePath, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', $u];
+        $desc = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'a']];
+        $p = @proc_open($cmd, $desc, $pp);
+        if (!is_resource($p)) {
+            $results[$u] = true; // can't probe -> don't reject
+            continue;
+        }
+        fclose($pp[0]);
+        stream_set_blocking($pp[1], false);
+        $procs[$u] = $p;
+        $pipes[$u] = $pp[1];
+        $out[$u] = '';
+    }
+
+    $deadline = microtime(true) + 10;
+    while (!empty($pipes) && microtime(true) < $deadline) {
+        $read = array_values($pipes);
+        $write = null;
+        $except = null;
+        if (@stream_select($read, $write, $except, 1) > 0) {
+            foreach ($read as $fh) {
+                $u = array_search($fh, $pipes, true);
+                if ($u !== false) {
+                    $out[$u] .= fread($fh, 8192);
+                }
+            }
+        }
+        foreach ($procs as $u => $p) {
+            if (!isset($pipes[$u])) {
+                continue;
+            }
+            $st = proc_get_status($p);
+            if (!$st['running'] && feof($pipes[$u])) {
+                fclose($pipes[$u]);
+                proc_close($p);
+                unset($pipes[$u], $procs[$u]);
+            }
+        }
+    }
+    // Kill any stragglers still running at the deadline. SIGKILL (9), not the
+    // default SIGTERM: ffprobe stuck in a slow/dead network read ignores
+    // SIGTERM, and proc_close() then BLOCKS waiting for it - with several stuck
+    // probes that stacked up into a multi-minute hang. SIGKILL is enforced by
+    // the kernel immediately, so proc_close returns at once.
+    foreach ($procs as $u => $p) {
+        if (isset($pipes[$u])) {
+            @fclose($pipes[$u]);
+        }
+        @proc_terminate($p, 9);
+        @proc_close($p);
+    }
+
+    foreach ($urls as $u) {
+        $duration = (float) trim($out[$u] ?? '');
+        $results[$u] = !($duration > 0 && $duration < 300);
+    }
+    return $results;
 }
 
 // Downloads a real, bounded chunk (up to 10MB, capped at 20s) from a
@@ -11664,6 +11818,13 @@ function writeToCache($key, $value, $expires = null, $report=true)
     // Specify the cache file path
     $cacheFilePath = 'cache.json';
 
+    // cache.json is the temporary hot layer and is wiped on deploy; rebuild it
+    // from the durable SQLite store first if it's gone, so we don't start from
+    // an empty cache after every deployment.
+    if (function_exists('m3uCacheEnsureJson')) {
+        m3uCacheEnsureJson($cacheFilePath);
+    }
+
     // Check if the cache file exists or create it if not
     if (!file_exists($cacheFilePath)) {
         file_put_contents($cacheFilePath, '{}');
@@ -11676,14 +11837,28 @@ function writeToCache($key, $value, $expires = null, $report=true)
     // Serialize the value to a JSON string
     $serializedValue = json_encode($value);
 
-    // Read existing cache data
-    $cacheData = json_decode(file_get_contents($cacheFilePath), true) ? : [];
+    // Persist to the durable SQLite store (source of truth). See m3uCacheStore():
+    // it records 'resolved' and 'failed' (failed is dashboard-only, informational)
+    // and skips the transient "_running_" marker. Fail-safe.
+    if (function_exists('m3uCacheStore')) {
+        m3uCacheStore($key, $value, $expirationTime);
+    }
 
-    // Update the cache data with the new value
-    $cacheData[$key] = ['value' => $serializedValue, 'addedTime' => $now, 'expirationTime' => $expirationTime, ];
+    // cache.json is the HOT layer and only ever holds "_running_" (the in-progress
+    // guard) and real resolved URLs - never "_failed_". A failed lookup is logged
+    // to SQLite for the dashboard but must not be cached here, so it is never used
+    // as a cache-hit and never gets rebuilt back into cache.json. This keeps the
+    // rebuild one-directional (SQLite resolved -> cache.json) with no failed/loop.
+    if ($value !== '_failed_') {
+        // Read existing cache data
+        $cacheData = json_decode(file_get_contents($cacheFilePath), true) ? : [];
 
-    // Write the updated cache data back to the file
-    file_put_contents($cacheFilePath, json_encode($cacheData));
+        // Update the cache data with the new value
+        $cacheData[$key] = ['value' => $serializedValue, 'addedTime' => $now, 'expirationTime' => $expirationTime, ];
+
+        // Write the updated cache data back to the file
+        file_put_contents($cacheFilePath, json_encode($cacheData));
+    }
 
     if ($GLOBALS['DEBUG'] && $report == true) {
         echo 'Added to Cache - Key: ' . $key . ' Value: ' . json_encode($value) .
@@ -11696,6 +11871,12 @@ function readFromCache($key, $report=true)
 {
     // Specify the cache file path
     $cacheFilePath = 'cache.json';
+
+    // Rebuild the temporary hot cache from the durable SQLite store if it was
+    // wiped (e.g. by a deploy), so reads immediately see the persisted entries.
+    if (function_exists('m3uCacheEnsureJson')) {
+        m3uCacheEnsureJson($cacheFilePath);
+    }
 
     // Check if the cache file exists or create it if not
     if (!file_exists($cacheFilePath)) {

@@ -100,9 +100,11 @@ if ($limit > 0) {
 $jobs = [];
 foreach ($targets as [$type, $movieId, $data, $label]) {
     foreach ($accounts as $account) {
+        // &prewarm=1 tags the resolved SQLite row as prewarmed so the dashboard
+        // can show what was warmed ahead of time vs resolved by real viewers.
         $url = $type === 'series'
-            ? "$base/play.php?type=series&movieId=$movieId&data=" . rawurlencode($data) . "&username=" . rawurlencode($account)
-            : "$base/play.php?movieId=$movieId&username=" . rawurlencode($account);
+            ? "$base/play.php?type=series&movieId=$movieId&data=" . rawurlencode($data) . "&username=" . rawurlencode($account) . "&prewarm=1"
+            : "$base/play.php?movieId=$movieId&username=" . rawurlencode($account) . "&prewarm=1";
         $jobs[] = ['url' => $url, 'label' => "$label [$account]", 'account' => $account, 'movieId' => $movieId, 'type' => $type];
     }
 }

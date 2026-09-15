@@ -6,6 +6,15 @@ set -e
 # Runtime memory limit (previously set inline in the Dockerfile CMD).
 echo "memory_limit=${PHP_MEMORY_LIMIT:-1024M}" > /usr/local/etc/php/conf.d/memory-limit.ini
 
+# The durable data dir (SQLite DB, event log, install secret) lives on a
+# mounted volume that comes up root-owned; make it writable by the web user so
+# play.php and the dashboard can persist to it.
+if [ -n "${M3U_DATA_DIR}" ]; then
+    mkdir -p "${M3U_DATA_DIR}"
+    chown -R www-data:www-data "${M3U_DATA_DIR}" || true
+    chmod 700 "${M3U_DATA_DIR}" || true
+fi
+
 # Optional prewarmer. DISABLED by default: enabling it makes the server resolve
 # titles ahead of time so the first viewer play is an instant cache hit instead
 # of a ~13s AIOStreams round-trip - but each resolve pulls ~10MB through your

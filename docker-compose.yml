@@ -14,6 +14,17 @@ services:
     environment:
       - HEADLESSVIDX_ADDRESS=xxxx.xxxx.xxxx:xxx
       - PHP_MEMORY_LIMIT=1024M
+      # ── Prewarmer (optional) ─────────────────────────────────────────
+      # Resolves titles ahead of time so the FIRST viewer play is an instant
+      # cache hit instead of a ~13s AIOStreams round-trip. DISABLED by default.
+      # WARNING: each resolve pulls ~10MB through your debrid provider, so a
+      # large list can exhaust its fair-use allowance. Keep the limit curated.
+      - PREWARM_ENABLED=false
+      # Cron schedule (run a little more often than $expirationHours in
+      # config.php, default 3h, so warmed titles never go cold):
+      - "PREWARM_SCHEDULE=0 */2 * * *"
+      # Arguments passed to prewarm.php (see that file's header for all options):
+      - "PREWARM_ARGS=--playlist=top --limit=400 --accounts=Unlimited,UnlimitedFR --base=http://127.0.0.1 --workers=8"
     # /dev/shm backs the HLS segment/init RAM cache (see getRamCacheDir() in
     # hls_shared.php) - Docker's default is only 64MB, which can't even hold
     # one segment of a high-bitrate remux (a 90Mbps title needs ~120MB just

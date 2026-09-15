@@ -1,5 +1,18 @@
 # TMDB to VOD: Free Live TV, Movies & Series Playlist \[Xtream Codes & M3U8\]
 
+## Update 09/14/2026
+
+A large reliability, language, subtitle, analytics and security pass. Highlights:
+
+- <strong>M3uListerr analytics dashboard (new):</strong> a self-contained `dashboard.php` that logs and visualises every playback — an interactive globe, charts and a sessions table showing title/poster, movie vs TV show, account, requested & audio language, the exact release and debrid service used, playback progress (% and h:mm:ss), subtitles offered, country/city/ISP, device and user-agent, IP, and resolve time. Login-protected with a private SQLite store, plus a built-in `config.php` editor and credential management. See [M3uListerr Dashboard](#m3ulisterr-analytics-dashboard).
+- <strong>Correct-language audio:</strong> multi-audio releases no longer play the wrong language. The picked audio track is now chosen from the file's own header (e.g. an "ITA ENG" release plays English, not Italian) and the HLS `LANGUAGE` tag reports what actually plays instead of always claiming English.
+- <strong>French account / `?lang=fr`:</strong> a dedicated French path that only accepts releases whose default audio is really French (verified from the container header, not just the tag), preferring cached torrents and an x264 1080p→720p→SD quality ladder (`?codec=x265` flips to an HEVC-first ladder). French streams are served through a lightweight byte-proxy (no ffmpeg) that resolves the source once and streams ranges, avoiding debrid IP rate-limiting.
+- <strong>Subtitles:</strong> both European (pt-PT) and Brazilian (pt-BR) Portuguese subtitle tracks are offered, with a direct OpenSubtitles API fallback for when the bundled provider is down, and full subtitle support for TV series episodes.
+- <strong>Playback stability:</strong> fixed duplicated frames / timestamp discontinuities at segment boundaries, and fixed a memory-exhaustion bug that silently produced empty segments (endless buffering) on high-bitrate 4K/remux sources.
+- <strong>Security hardening:</strong> blocked public access to sensitive files (`.git`, `cache.json`, logs, `config.php`, the dashboard's private data), added an SSRF guard to the video proxy, and a strict Content-Security-Policy, CSRF protection, session hardening and login lockout on the dashboard.
+
+---
+
 ## Update 09/28/2025
 
 - <strong>Live TV:</strong> Fixed the Live TV section and added DrewLive, a massive all in one source of 7,000+ channels.
@@ -90,6 +103,10 @@ Generate dynamic playlists for Live TV, Movies and TV Series using a mock versio
 - Most of the live TV channels include detailed TV Guide (EPG) information.
 - Automatic caching of found streaming links for efficient playback
 - 10K Full length adult movies added to the VOD (disabled by default)
+- Correct-language audio selection for multi-audio releases (reads the file header, not just the tag)
+- Dedicated French (`UnlimitedFR` / `?lang=fr`) path with header-verified French audio and a cached-first quality ladder
+- European (pt-PT) and Brazilian (pt-BR) Portuguese subtitle tracks, with a direct OpenSubtitles API fallback
+- **M3uListerr** analytics dashboard: playback stats, an interactive globe, charts and a per-session table (see below)
 
 # Getting Started
 
@@ -164,6 +181,30 @@ The project includes a GitHub Actions workflow `.github/workflows/deploy.yml` th
 ### Environment Variables
 The following environment variables can be used to configure the container:
 - `HEADLESSVIDX_ADDRESS`: The address of the HeadlessVidX service (default: `localhost:3202`). In docker-compose, this is set to `headlessvidx:3202`.
+
+# M3uListerr Analytics Dashboard
+
+`dashboard.php` is a self-contained, login-protected analytics and control panel for the server. It records one lightweight event per playback (resolve, playlist, segment, subtitle and proxy events) to a private log, imports them into a local SQLite database, and renders them as a modern dashboard.
+
+### What it shows
+- **Overview** — total sessions, resolves, unique viewers and countries; average resolve and segment-delivery times; cache hit/fail counts; and bar charts for debrid service used, country, device/player, account, language, **client ISP** and **movies vs TV shows**.
+- **Globe** — an interactive 3D globe plotting where each movie/TV show was requested from.
+- **Sessions** — a per-playback table with poster & title, **Movie/TV type and episode code**, account (and its password), requested & audio language, the exact **release name and its languages**, the **debrid service (AD/PM) and provider**, **playback progress** (% and `h:mm:ss` reached), the subtitle tracks offered, country + flag, city/zip, **client ISP**, device, **user-agent** and IP, and the resolve time (or a cache marker).
+- **Titles** — most-requested movies and TV shows as a poster grid.
+- **Cache** — a viewer for the resolver's `cache.json` entries.
+- **Config** — edit an allow-listed set of `config.php` settings from the browser (a timestamped backup is written and the file is syntax-checked before it is replaced).
+- **Account** — change the dashboard username and password.
+
+### Security
+- First run prompts you to create an admin account; the password is stored hashed (Argon2id) in a private SQLite database, never in code.
+- All state is kept in a private `m3ulisterr_data/` directory that the web server refuses to serve (SQLite DB, event log, sessions and a per-install secret); it is git-ignored and must never be committed.
+- A strict Content-Security-Policy (with a per-response nonce), CSRF tokens on every write, session binding/timeouts and login rate-limiting protect the dashboard. The bundled chart libraries are served from disk after login rather than from any CDN.
+- IP geolocation (country/city/ISP) uses the free ip-api.com service; each viewer IP is looked up once and cached.
+
+### Getting started
+1. Deploy the files as usual (the dashboard needs no extra setup).
+2. Ensure the app can create a writable `m3ulisterr_data/` directory next to the site (it is created automatically when writable).
+3. Open `http://YOUR_SERVER/dashboard.php`, create the admin account, and sign in. Data is imported on first load and whenever you press **Refresh data**.
 
 # Legal Disclaimer
 

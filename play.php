@@ -4311,7 +4311,60 @@ function proxyModeLanguageVerdict($finalUrl, $tier, $languageName) {
 // timeout, plus one retry only when the first attempt failed fast (never a
 // second full-length wait), stops a slow response masquerading as "nothing
 // available".
+// RAM-backed cache directory for the AIOStreams candidate list. Prefers
+// /dev/shm (tmpfs) on Linux so nothing touches disk; falls back to the system
+// temp dir elsewhere.
+function aioListCacheDir() {
+    static $dir = null;
+    if ($dir !== null) {
+        return $dir;
+    }
+    foreach (['/dev/shm', sys_get_temp_dir()] as $base) {
+        $candidate = $base . '/aio_list_cache';
+        if (is_dir($candidate) || @mkdir($candidate, 0700, true)) {
+            if (is_writable($candidate)) {
+                return $dir = $candidate;
+            }
+        }
+    }
+    return $dir = false;
+}
+
+// The single AIOStreams /stream/... call is by far the slowest part of a cold
+// resolve - measured a consistent ~12.5s per call, because AIOStreams
+// re-scrapes its indexers and re-checks debrid cache status every time with no
+// caching of its own. The candidate list for a title is identical regardless
+// of which account/language asked for it (language filtering happens here, not
+// on AIOStreams' side), so caching the raw response for a few minutes makes the
+// SECOND language of a title, retries, concurrent requests, the post-expiry
+// re-resolve, and prewarming all skip that 12.5s entirely. TTL is deliberately
+// short so a debrid cache-status change (a torrent finishing caching) is picked
+// up soon; a stale "cached" marker only costs one failed playability check that
+// then falls through to the next candidate, so it is never wrong, just briefly
+// suboptimal.
+define('AIO_LIST_CACHE_TTL', 600);
+
 function fetchAioStreamsList($url) {
+    $dir = aioListCacheDir();
+    $cachePath = $dir !== false ? $dir . '/' . md5($url) . '.json' : false;
+
+    // Occasional cheap sweep of entries past their TTL so /dev/shm doesn't grow
+    // unbounded over a long uptime (each entry is ~160KB).
+    if ($dir !== false && mt_rand(1, 40) === 1) {
+        foreach (glob($dir . '/*.json') ?: [] as $f) {
+            if (time() - @filemtime($f) > AIO_LIST_CACHE_TTL) {
+                @unlink($f);
+            }
+        }
+    }
+
+    if ($cachePath !== false && is_file($cachePath) && (time() - filemtime($cachePath)) < AIO_LIST_CACHE_TTL) {
+        $cached = @file_get_contents($cachePath);
+        if ($cached !== false && $cached !== '') {
+            return $cached;
+        }
+    }
+
     for ($attempt = 1; $attempt <= 2; $attempt++) {
         $started = microtime(true);
         $ch = curl_init($url);
@@ -4329,6 +4382,12 @@ function fetchAioStreamsList($url) {
         curl_close($ch);
 
         if ($body !== false && $status === 200) {
+            if ($cachePath !== false) {
+                $tmp = $cachePath . '.' . getmypid() . '.tmp';
+                if (@file_put_contents($tmp, $body) !== false) {
+                    @rename($tmp, $cachePath);
+                }
+            }
             return $body;
         }
         if (microtime(true) - $started > 20) {

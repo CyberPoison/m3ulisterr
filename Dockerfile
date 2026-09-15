@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     ffmpeg \
+    cron \
     nano \
     vim \
     && rm -rf /var/lib/apt/lists/*
@@ -43,6 +44,10 @@ WORKDIR /var/www/html
 # Copy application files
 COPY . /var/www/html/
 
+# Install the container entrypoint (starts the optional prewarmer cron, then Apache)
+RUN cp /var/www/html/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Set ownership and permissions
 RUN chown -R www-data:www-data /var/www/html \
     && chmod -R 755 /var/www/html
@@ -58,5 +63,6 @@ ENV PHP_MEMORY_LIMIT=1024M
 # Expose port 80
 EXPOSE 80
 
-# Configure PHP runtime memory limit and start Apache
-CMD ["sh", "-c", "echo \"memory_limit=${PHP_MEMORY_LIMIT}\" > /usr/local/etc/php/conf.d/memory-limit.ini && apache2-foreground"]
+# Start via the entrypoint: applies the memory limit, optionally launches the
+# prewarmer cron (PREWARM_ENABLED=true), then runs Apache in the foreground.
+CMD ["/usr/local/bin/docker-entrypoint.sh"]

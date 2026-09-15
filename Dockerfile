@@ -4,6 +4,7 @@ FROM php:8.2-apache
 RUN apt-get update && apt-get install -y \
     libcurl4-openssl-dev \
     libpng-dev \
+    libjpeg62-turbo-dev \
     libxml2-dev \
     libzip-dev \
     zip \
@@ -14,8 +15,14 @@ RUN apt-get update && apt-get install -y \
     vim \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PHP extensions
-RUN docker-php-ext-install curl gd xml zip opcache
+# Install PHP extensions. gd MUST be configured with --with-jpeg before install
+# - without it, imagecreatetruecolor()/imagestring()/etc. all work fine but
+# imagejpeg() itself is left undefined, which is a fatal error (not a warning)
+# the first time anything calls it - hit in production via the block-notice
+# screen in m3ulisterr_lib.php, which now also tolerates this by falling back
+# to PNG, but real JPEG support is the correct fix.
+RUN docker-php-ext-configure gd --with-jpeg \
+    && docker-php-ext-install curl gd xml zip opcache
 
 # Enable Apache mod_rewrite
 RUN a2enmod rewrite

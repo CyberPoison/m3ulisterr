@@ -456,6 +456,36 @@ function m3uIpUsageToday($ip) {
     return $out;
 }
 
+// Picks a raster format GD can actually encode on THIS host. Some PHP/GD
+// builds are compiled without libjpeg (seen in production: gd's core drawing
+// functions - imagecreatetruecolor, imagestring, etc. - all work fine, but
+// imagejpeg() itself is undefined, which is a fatal error, not a warning, the
+// first time anything tries to call it). PNG is preferred as the fallback
+// because libpng support ships with GD in effectively every PHP build, and is
+// actually the better lossless choice for this flat-color/text content anyway.
+// Returns 'image/jpeg', 'image/png', or null if GD can encode neither (so a
+// caller can fall back further, e.g. to plain text).
+function m3uPickGdOutputMime() {
+    if (function_exists('imagejpeg')) {
+        return 'image/jpeg';
+    }
+    if (function_exists('imagepng')) {
+        return 'image/png';
+    }
+    return null;
+}
+
+// Encodes a GD image with whatever format m3uPickGdOutputMime() picked, either
+// to a file ($path given) or straight to stdout ($path null - caller must set
+// the Content-Type header first). No-op if $mime is null.
+function m3uEncodeGdImage($img, $mime, $path = null) {
+    if ($mime === 'image/png') {
+        imagepng($img, $path, 6);
+    } elseif ($mime === 'image/jpeg') {
+        imagejpeg($img, $path, 90);
+    }
+}
+
 // Renders the "blocked" notice as a GD true-color image resource (caller owns
 // it - imagedestroy() when done), or null if the GD extension isn't available.
 // Shared by the direct image fallback (m3uServeBlockScreen) and the video
@@ -520,17 +550,18 @@ function m3uServeBlockScreen($message, $title = 'Access blocked') {
         header('Pragma: no-cache');
     }
 
-    $img = m3uRenderBlockImage($message, $title);
+    $mime = m3uPickGdOutputMime();
+    $img = ($mime !== null) ? m3uRenderBlockImage($message, $title) : null;
     if ($img !== null) {
         if (!headers_sent()) {
-            header('Content-Type: image/jpeg');
+            header('Content-Type: ' . $mime);
         }
-        imagejpeg($img, null, 90);
+        m3uEncodeGdImage($img, $mime, null);
         imagedestroy($img);
         exit();
     }
 
-    // No GD: plain-text fallback screen.
+    // No GD, or GD can't encode any raster format we know: plain-text fallback.
     $message = trim((string) $message);
     if ($message === '') {
         $message = 'Your IP has been blocked due to too many movie / TV show requests.';
@@ -689,11 +720,14 @@ function m3uServeBlockVideo($message, $title = 'Access blocked') {
         }
 
         $ffmpegPath = m3uFindFfmpeg();
-        $img = ($ffmpegPath !== '') ? m3uRenderBlockImage($message, $title) : null;
+        $imgMime = m3uPickGdOutputMime();
+        $img = ($ffmpegPath !== '' && $imgMime !== null) ? m3uRenderBlockImage($message, $title) : null;
 
         if ($img !== null) {
-            $imgPath = $dir . '/' . $hash . '.src.jpg';
-            imagejpeg($img, $imgPath, 92);
+            // ffmpeg reads either format fine as a looped image input.
+            $imgExt = ($imgMime === 'image/png') ? 'png' : 'jpg';
+            $imgPath = $dir . '/' . $hash . '.src.' . $imgExt;
+            m3uEncodeGdImage($img, $imgMime, $imgPath);
             imagedestroy($img);
 
             $tmpPath = $path . '.tmp-' . getmypid() . '.mp4';

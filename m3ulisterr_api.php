@@ -211,6 +211,7 @@ function m3uApi(PDO $db, string $q): array {
                     'failedCache' => $failed,
                     'resolvedCache' => $resolvedCache,
                     'prewarmedCount' => $prewarmedCount,
+                    'blockedCount' => (int) $db->query("SELECT COUNT(*) c FROM blocked_ips")->fetch()['c'],
                     'avgResolveMs' => $avgResolve ? round((float) $avgResolve) : null,
                     'avgDeliverMs' => $avgDeliver ? round((float) $avgDeliver) : null,
                 ],
@@ -231,7 +232,37 @@ function m3uApi(PDO $db, string $q): array {
             ];
 
         case 'sessions':
+            // Annotate each row with its IP's block state + today's request count
+            // so the Sessions table can show a Block/Unblock control per IP.
+            $blockedMap = [];
+            foreach (m3uListBlockedIps() as $b) {
+                $blockedMap[$b['ip']] = $b;
+            }
+            $today = gmdate('Y-m-d');
+            // Per-type daily counts (movie vs series) keyed by IP.
+            $usageMap = [];
+            foreach ($db->query("SELECT ip, media_type, count FROM ip_usage WHERE day = '" . $today . "'")->fetchAll() as $d) {
+                $ipk = $d['ip'];
+                if (!isset($usageMap[$ipk])) {
+                    $usageMap[$ipk] = ['movie' => 0, 'series' => 0];
+                }
+                $mt = ($d['media_type'] === 'series') ? 'series' : 'movie';
+                $usageMap[$ipk][$mt] = (int) $d['count'];
+            }
+            foreach ($sessions as &$s) {
+                $ip = (string) ($s['ip'] ?? '');
+                $s['blocked'] = isset($blockedMap[$ip]);
+                $s['block_reason'] = $s['blocked'] ? (string) ($blockedMap[$ip]['reason'] ?? '') : '';
+                $u = $usageMap[$ip] ?? ['movie' => 0, 'series' => 0];
+                $s['today_movies'] = $u['movie'];
+                $s['today_episodes'] = $u['series'];
+                $s['today_count'] = $u['movie'] + $u['series'];
+            }
+            unset($s);
             return ['ok' => true, 'sessions' => $sessions];
+
+        case 'blocked':
+            return ['ok' => true, 'blocked' => m3uListBlockedIps()];
 
         case 'config':
             return ['ok' => true, 'fields' => m3uEditableConfig(), 'values' => m3uReadConfigValues()];

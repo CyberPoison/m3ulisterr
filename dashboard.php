@@ -153,6 +153,14 @@ function m3uMigrate(PDO $db): void {
         cache_key TEXT PRIMARY KEY, value TEXT, status TEXT, added INTEGER, expires INTEGER,
         prewarmed INTEGER DEFAULT 0, movie_id INTEGER, username TEXT, lang TEXT, media_type TEXT, updated INTEGER
     )');
+    // IP access control (manual blocks + per-IP daily rate-limit counter).
+    // Mirrors the schema created in m3uCacheDb() (m3ulisterr_lib.php).
+    $db->exec('CREATE TABLE IF NOT EXISTS blocked_ips (
+        ip TEXT PRIMARY KEY, reason TEXT, auto INTEGER DEFAULT 0, created INTEGER
+    )');
+    $db->exec('CREATE TABLE IF NOT EXISTS ip_daily (
+        ip TEXT, day TEXT, count INTEGER DEFAULT 0, PRIMARY KEY (ip, day)
+    )');
 }
 
 // Absolute path to the temporary hot cache file this app uses.
@@ -579,6 +587,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ? ['ok' => true, 'written' => $written]
             : ['ok' => false, 'error' => 'rebuild failed (no durable store or not writable)']);
         exit;
+    } elseif ($action === 'block_ip') {
+        if (!m3uIsLoggedIn()) { http_response_code(403); exit; }
+        m3uCheckCsrf();
+        header('Content-Type: application/json');
+        $ip = trim((string) ($_POST['ip'] ?? ''));
+        $reason = trim((string) ($_POST['reason'] ?? ''));
+        if ($reason === '') {
+            $reason = 'Your IP has been blocked due to too many movie / TV show requests.';
+        }
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            echo json_encode(['ok' => false, 'error' => 'Invalid IP address.']);
+            exit;
+        }
+        echo json_encode(['ok' => (bool) m3uBlockIp($ip, $reason, false)]);
+        exit;
+    } elseif ($action === 'unblock_ip') {
+        if (!m3uIsLoggedIn()) { http_response_code(403); exit; }
+        m3uCheckCsrf();
+        header('Content-Type: application/json');
+        $ip = trim((string) ($_POST['ip'] ?? ''));
+        echo json_encode(['ok' => (bool) m3uUnblockIp($ip)]);
+        exit;
     }
 }
 
@@ -605,6 +635,9 @@ function m3uEditableConfig(): array {
     return [
         'maxResolution' => ['Max resolution (px)', 'int'],
         'expirationHours' => ['Cache expiry (hours)', 'int'],
+        'dailyMovieLimit' => ['Daily movies / IP (0=off)', 'int'],
+        'dailyEpisodeLimit' => ['Daily episodes / IP (0=off)', 'int'],
+        'dailyRequestLimit' => ['Daily total / IP (0=off)', 'int'],
         'timeOut' => ['Scraper timeout (s)', 'int'],
         'totalPages' => ['Playlist pages', 'int'],
         'cacheSize' => ['Cache size (MB)', 'int'],

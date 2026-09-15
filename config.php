@@ -142,6 +142,21 @@ $expirationHours = 3; // Default: 3 (numerical value only)
 // Example: 20 seconds is 20
 $timeOut = 20; // numerical value only
 
+// ── Per-IP daily request limits (anti-abuse) ─────────────────────────────
+// Caps how many movie/TV-show link requests a single client IP may make per
+// day (UTC). When an IP goes over a limit, play.php stops resolving for that
+// IP and serves an explanatory "limit reached" image to the client (see
+// m3uServeBlockScreen() in m3ulisterr_lib.php). Counters reset every day
+// automatically. Set a value to 0 to disable that particular limit. All three
+// are editable from the dashboard config editor.
+//
+// There are separate per-type limits for movies and TV episodes, plus an
+// optional combined total that applies across both. A request is blocked if it
+// would exceed EITHER its own type limit OR the combined total.
+$dailyMovieLimit   = 0; // 0 = unlimited movies per IP per day.   Example: 100
+$dailyEpisodeLimit = 0; // 0 = unlimited TV episodes per IP/day.  Example: 200
+$dailyRequestLimit = 0; // 0 = unlimited combined total. Example: 250 (movies + episodes)
+
 // Change the run order here. This can be Used to speed up the process of finding a link.
 // Cut the entire line and paste it above or below another. The list is ran
 // from top to bottom. You can also disable a website by commenting it out with //

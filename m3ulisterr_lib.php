@@ -160,6 +160,30 @@ function m3uCacheDb() {
         )');
         $pdo->exec('CREATE INDEX IF NOT EXISTS idx_rc_prewarmed ON resolved_cache(prewarmed)');
         $pdo->exec('CREATE INDEX IF NOT EXISTS idx_rc_expires ON resolved_cache(expires)');
+        // IP access control: manual/admin blocks (from the dashboard Sessions
+        // menu) and the per-IP daily request counter (rate limiting). Both
+        // share this durable store so they survive deploys.
+        $pdo->exec('CREATE TABLE IF NOT EXISTS blocked_ips (
+            ip TEXT PRIMARY KEY,
+            reason TEXT,
+            auto INTEGER DEFAULT 0,
+            created INTEGER
+        )');
+        $pdo->exec('CREATE TABLE IF NOT EXISTS ip_daily (
+            ip TEXT,
+            day TEXT,
+            count INTEGER DEFAULT 0,
+            PRIMARY KEY (ip, day)
+        )');
+        // Per-type daily counters (movie vs series/episode) so movies and TV
+        // shows can be rate-limited independently. Keyed by media_type as well.
+        $pdo->exec('CREATE TABLE IF NOT EXISTS ip_usage (
+            ip TEXT,
+            day TEXT,
+            media_type TEXT,
+            count INTEGER DEFAULT 0,
+            PRIMARY KEY (ip, day, media_type)
+        )');
         $db = $pdo;
     } catch (Throwable $e) {
         $db = null;
@@ -266,6 +290,239 @@ function m3uClientIp() {
     // any viewer write whatever address they like into the logs.
     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
     return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '';
+}
+
+// ---------------------------------------------------------------------------
+// IP access control: manual blocking + per-IP daily rate limiting.
+// All helpers are fail-open (return "not blocked" / 0) if the DB is missing,
+// so a storage hiccup never locks every viewer out of the service.
+// ---------------------------------------------------------------------------
+
+// Returns [bool blocked, string reason] for a manual/admin block on this IP.
+function m3uIpBlockStatus($ip) {
+    if ($ip === '') {
+        return [false, ''];
+    }
+    $db = m3uCacheDb();
+    if (!$db) {
+        return [false, ''];
+    }
+    try {
+        $st = $db->prepare('SELECT reason FROM blocked_ips WHERE ip = ?');
+        $st->execute([$ip]);
+        $r = $st->fetch();
+        if ($r) {
+            return [true, (string) ($r['reason'] ?? '')];
+        }
+    } catch (Throwable $e) {
+        // fail open
+    }
+    return [false, ''];
+}
+
+// Adds (or updates) a block on an IP. $auto=true marks an automatic rate-limit
+// block; $auto=false is a manual admin block from the dashboard.
+function m3uBlockIp($ip, $reason = '', $auto = false) {
+    $ip = trim((string) $ip);
+    if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+        return false;
+    }
+    $db = m3uCacheDb();
+    if (!$db) {
+        return false;
+    }
+    try {
+        $st = $db->prepare('INSERT INTO blocked_ips (ip, reason, auto, created)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(ip) DO UPDATE SET reason = excluded.reason, auto = excluded.auto');
+        return $st->execute([$ip, (string) $reason, $auto ? 1 : 0, time()]);
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+// Removes a block from an IP.
+function m3uUnblockIp($ip) {
+    $db = m3uCacheDb();
+    if (!$db) {
+        return false;
+    }
+    try {
+        return $db->prepare('DELETE FROM blocked_ips WHERE ip = ?')->execute([(string) $ip]);
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+// Lists all blocked IPs (newest first) for the dashboard.
+function m3uListBlockedIps() {
+    $db = m3uCacheDb();
+    if (!$db) {
+        return [];
+    }
+    try {
+        return $db->query('SELECT ip, reason, auto, created FROM blocked_ips ORDER BY created DESC')->fetchAll();
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+// Increments today's (UTC) request counter for an IP and returns the new count.
+function m3uIpDailyIncrement($ip) {
+    if ($ip === '') {
+        return 0;
+    }
+    $db = m3uCacheDb();
+    if (!$db) {
+        return 0;
+    }
+    $day = gmdate('Y-m-d');
+    try {
+        $db->prepare('INSERT INTO ip_daily (ip, day, count) VALUES (?, ?, 1)
+            ON CONFLICT(ip, day) DO UPDATE SET count = count + 1')->execute([$ip, $day]);
+        $st = $db->prepare('SELECT count FROM ip_daily WHERE ip = ? AND day = ?');
+        $st->execute([$ip, $day]);
+        $r = $st->fetch();
+        return $r ? (int) $r['count'] : 0;
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+// Reads today's request count for an IP without incrementing it.
+function m3uIpDailyCount($ip) {
+    $db = m3uCacheDb();
+    if (!$db || $ip === '') {
+        return 0;
+    }
+    try {
+        $st = $db->prepare('SELECT count FROM ip_daily WHERE ip = ? AND day = ?');
+        $st->execute([$ip, gmdate('Y-m-d')]);
+        $r = $st->fetch();
+        return $r ? (int) $r['count'] : 0;
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+// Normalizes a request's media type to 'movie' or 'series' for counting.
+function m3uNormalizeMediaType($type) {
+    return ((string) $type === 'series') ? 'series' : 'movie';
+}
+
+// Increments today's (UTC) per-type counter for an IP and returns the new
+// count for that media type ('movie' or 'series').
+function m3uIpUsageIncrement($ip, $mediaType) {
+    if ($ip === '') {
+        return 0;
+    }
+    $db = m3uCacheDb();
+    if (!$db) {
+        return 0;
+    }
+    $mediaType = m3uNormalizeMediaType($mediaType);
+    $day = gmdate('Y-m-d');
+    try {
+        $db->prepare('INSERT INTO ip_usage (ip, day, media_type, count) VALUES (?, ?, ?, 1)
+            ON CONFLICT(ip, day, media_type) DO UPDATE SET count = count + 1')
+           ->execute([$ip, $day, $mediaType]);
+        $st = $db->prepare('SELECT count FROM ip_usage WHERE ip = ? AND day = ? AND media_type = ?');
+        $st->execute([$ip, $day, $mediaType]);
+        $r = $st->fetch();
+        return $r ? (int) $r['count'] : 0;
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+// Today's per-type counts for an IP: ['movie' => n, 'series' => n, 'total' => n].
+function m3uIpUsageToday($ip) {
+    $out = ['movie' => 0, 'series' => 0, 'total' => 0];
+    $db = m3uCacheDb();
+    if (!$db || $ip === '') {
+        return $out;
+    }
+    try {
+        $st = $db->prepare('SELECT media_type, count FROM ip_usage WHERE ip = ? AND day = ?');
+        $st->execute([$ip, gmdate('Y-m-d')]);
+        foreach ($st->fetchAll() as $row) {
+            $mt = m3uNormalizeMediaType($row['media_type']);
+            $out[$mt] = (int) $row['count'];
+        }
+        $out['total'] = $out['movie'] + $out['series'];
+    } catch (Throwable $e) {
+        // fail open
+    }
+    return $out;
+}
+
+// Serves a full-screen "blocked" notice to the client as an IMAGE (so IPTV /
+// VOD players that expect media on the play.php URL still show something the
+// viewer can read), then exits. Falls back to a plain-text screen when the GD
+// image extension is unavailable. Never returns.
+function m3uServeBlockScreen($message, $title = 'Access blocked') {
+    // Avoid any caching of the notice by players / CDNs.
+    if (!headers_sent()) {
+        header('Cache-Control: no-store, no-cache, must-revalidate');
+        header('Pragma: no-cache');
+    }
+
+    $message = trim((string) $message);
+    if ($message === '') {
+        $message = 'Your IP has been blocked due to too many movie / TV show requests.';
+    }
+
+    if (function_exists('imagecreatetruecolor')) {
+        $w = 1280;
+        $h = 720;
+        $img = imagecreatetruecolor($w, $h);
+        $bg = imagecolorallocate($img, 17, 18, 22);      // near-black
+        $accent = imagecolorallocate($img, 229, 57, 53); // red
+        $fg = imagecolorallocate($img, 240, 240, 245);   // off-white
+        $muted = imagecolorallocate($img, 150, 152, 160);
+        imagefilledrectangle($img, 0, 0, $w, $h, $bg);
+        // Top accent bar.
+        imagefilledrectangle($img, 0, 0, $w, 8, $accent);
+
+        // Title (built-in font 5, scaled up by drawing larger via imagestring
+        // is limited; keep it readable and centered).
+        $titleText = strtoupper($title);
+        $tw = imagefontwidth(5) * strlen($titleText);
+        imagestring($img, 5, (int) (($w - $tw) / 2), 250, $titleText, $accent);
+
+        // Word-wrap the message across the middle of the screen.
+        $font = 4;
+        $charW = imagefontwidth($font);
+        $maxChars = (int) (($w - 160) / $charW);
+        $lines = [];
+        foreach (explode("\n", wordwrap($message, $maxChars, "\n", true)) as $ln) {
+            $lines[] = $ln;
+        }
+        $y = 310;
+        foreach ($lines as $ln) {
+            $lw = $charW * strlen($ln);
+            imagestring($img, $font, (int) (($w - $lw) / 2), $y, $ln, $fg);
+            $y += imagefontheight($font) + 8;
+        }
+
+        $footer = 'Contact the administrator if you believe this is a mistake.';
+        $fw = imagefontwidth(2) * strlen($footer);
+        imagestring($img, 2, (int) (($w - $fw) / 2), $h - 60, $footer, $muted);
+
+        if (!headers_sent()) {
+            header('Content-Type: image/jpeg');
+        }
+        imagejpeg($img, null, 90);
+        imagedestroy($img);
+        exit();
+    }
+
+    // No GD: plain-text fallback screen.
+    if (!headers_sent()) {
+        header('Content-Type: text/plain; charset=utf-8');
+    }
+    echo strtoupper($title) . "\n\n" . $message . "\n";
+    exit();
 }
 
 // Short, stable id for a media URL, so events from play.php, the HLS scripts

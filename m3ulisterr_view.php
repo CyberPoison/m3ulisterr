@@ -223,8 +223,14 @@ endif;
     </section>
 
     <section class="sec" data-sec="sessions">
+      <div class="panel" id="blockedPanel" hidden>
+        <h3>Blocked IPs <span id="blockedCount"></span></h3>
+        <div id="blockedMsg"></div>
+        <div class="tablewrap"><table class="tabtable" id="blockedTable"></table></div>
+      </div>
       <div class="panel">
         <h3>Playback sessions <span id="sessCount"></span></h3>
+        <div id="sessMsg"></div>
         <div class="tablewrap"><table class="tabtable" id="sessTable"></table></div>
       </div>
     </section>
@@ -313,7 +319,8 @@ async function loadOverview(){
   const cards=[['Sessions',s.sessions],['Resolves',s.resolves],['Unique IPs',s.uniqueIps],
     ['Countries',s.countries],['Avg resolve',s.avgResolveMs!=null?s.avgResolveMs+' ms':'—'],
     ['Avg segment',s.avgDeliverMs!=null?s.avgDeliverMs+' ms':'—'],
-    ['Durable cache',s.resolvedCache],['Prewarmed',s.prewarmedCount!=null?s.prewarmedCount:'—']];
+    ['Durable cache',s.resolvedCache],['Prewarmed',s.prewarmedCount!=null?s.prewarmedCount:'—'],
+    ['Blocked IPs',s.blockedCount!=null?s.blockedCount:'—']];
   $('#statCards').innerHTML=cards.map(c=>`<div class="stat"><div class="n">${esc(c[1])}</div><div class="l">${esc(c[0])}</div></div>`).join('');
   // cache.json health banner on the overview when it's missing/empty.
   if(d.cacheJson && (!d.cacheJson.exists || d.cacheJson.count===0)) renderCacheBanner(d.cacheJson,'ovBanner');
@@ -341,10 +348,11 @@ function renderMovies(movies){
 }
 
 async function loadSessions(){
+  await loadBlocked();
   const d=await api('sessions'); if(!d.ok)return;
   $('#sessCount').textContent=d.sessions.length+' rows';
   const head=`<thead><tr><th>Title</th><th>Type</th><th>Account</th><th>Lang</th><th>Release</th><th>Debrid</th>
-    <th>Playback</th><th>Subs</th><th>Country</th><th>City / Zip</th><th>Client ISP</th><th>Device</th><th>User agent</th><th>IP</th><th>Resolve</th></tr></thead>`;
+    <th>Playback</th><th>Subs</th><th>Country</th><th>City / Zip</th><th>Client ISP</th><th>Device</th><th>User agent</th><th>IP</th><th>Today</th><th>Resolve</th><th>Action</th></tr></thead>`;
   const rows=d.sessions.map(s=>{
     const debrid=s.debrid?`<span class="chip ${s.debrid.toLowerCase()==='ad'?'ad':s.debrid.toLowerCase()==='pm'?'pm':''}">${esc(s.debrid)}</span>`:'';
     const pct=s.playback_pct!=null?`<div class="pctbar"><i style="width:${s.playback_pct}%"></i></div>${s.playback_pct}%<br><span class="muted mono">${esc(s.playback_hms)}/${esc(s.duration_hms)}</span>`:'<span class="muted">—</span>';
@@ -366,11 +374,52 @@ async function loadSessions(){
       <td style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(s.isp||'')}">${esc(s.isp||'—')}</td>
       <td>${esc(s.device||'')}</td>
       <td class="mono" style="max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(s.ua||'')}">${esc(s.ua||'—')}</td>
-      <td class="mono">${esc(s.ip||'')}</td>
+      <td class="mono">${esc(s.ip||'')}${s.blocked?'<br><span class="chip" style="background:#e53935;color:#fff">blocked</span>':''}</td>
+      <td class="mono" title="Movies / TV episodes requested today by this IP">🎬${esc(s.today_movies||0)} 📺${esc(s.today_episodes||0)}</td>
       <td>${s.cache_hit==1?'<span class="chip">cache</span>':(s.resolve_ms!=null?esc(Math.round(s.resolve_ms))+' ms':'—')}</td>
+      <td>${s.ip?(s.blocked
+        ?`<button type="button" class="unblockBtn" data-ip="${esc(s.ip)}">Unblock</button>`
+        :`<button type="button" class="blockBtn" data-ip="${esc(s.ip)}">Block</button>`):''}</td>
     </tr>`;
   }).join('');
   $('#sessTable').innerHTML=head+'<tbody>'+rows+'</tbody>';
+  wireBlockButtons('#sessTable');
+}
+
+// Block / unblock handlers, shared by the sessions table and the blocked list.
+function wireBlockButtons(scope){
+  document.querySelectorAll(scope+' .blockBtn').forEach(b=>b.addEventListener('click',async()=>{
+    const ip=b.dataset.ip;
+    const reason=prompt('Reason shown to '+ip+' (leave blank for default):',
+      'Your IP has been blocked due to too many movie / TV show requests.');
+    if(reason===null)return;
+    b.disabled=true;
+    const r=await post('block_ip',{ip:ip,reason:reason});
+    if(r.ok){loadSessions();}else{alert(r.error||'Failed to block');b.disabled=false;}
+  }));
+  document.querySelectorAll(scope+' .unblockBtn').forEach(b=>b.addEventListener('click',async()=>{
+    const ip=b.dataset.ip; b.disabled=true;
+    const r=await post('unblock_ip',{ip:ip});
+    if(r.ok){loadSessions();}else{alert(r.error||'Failed to unblock');b.disabled=false;}
+  }));
+}
+
+async function loadBlocked(){
+  const d=await api('blocked'); if(!d.ok)return;
+  const panel=$('#blockedPanel');
+  if(!d.blocked.length){ panel.hidden=true; return; }
+  panel.hidden=false;
+  $('#blockedCount').textContent=d.blocked.length+' blocked';
+  const head=`<thead><tr><th>IP</th><th>Reason</th><th>Type</th><th>Since</th><th>Action</th></tr></thead>`;
+  const rows=d.blocked.map(b=>`<tr>
+    <td class="mono">${esc(b.ip)}</td>
+    <td style="max-width:360px">${esc(b.reason||'')}</td>
+    <td>${b.auto==1?'<span class="chip">auto</span>':'<span class="chip">manual</span>'}</td>
+    <td class="mono">${b.created?esc(new Date(b.created*1000).toLocaleString()):'—'}</td>
+    <td><button type="button" class="unblockBtn" data-ip="${esc(b.ip)}">Unblock</button></td>
+  </tr>`).join('');
+  $('#blockedTable').innerHTML=head+'<tbody>'+rows+'</tbody>';
+  wireBlockButtons('#blockedTable');
 }
 
 // Shows cache.json status + a rebuild button into any element id given.

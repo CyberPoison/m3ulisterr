@@ -9,6 +9,26 @@ require_once 'libs/JavaScriptUnpacker.php';
 require_once 'config.php';
 require_once 'm3ulisterr_lib.php';
 require_once 'debrid.php';
+
+// Dashboard "preview" of the block screen: lets an admin see exactly what a
+// blocked / rate-limited viewer is served. No auth needed - it only renders a
+// static notice image and reveals nothing sensitive.
+if (isset($_GET['previewBlock'])) {
+    $pv = strtolower((string) $_GET['previewBlock']);
+    if ($pv === 'movie' || $pv === 'movies') {
+        $lim = isset($dailyMovieLimit) ? (int) $dailyMovieLimit : 0;
+        m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting movies per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
+    }
+    if ($pv === 'episode' || $pv === 'episodes' || $pv === 'series') {
+        $lim = isset($dailyEpisodeLimit) ? (int) $dailyEpisodeLimit : 0;
+        m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting TV shows per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
+    }
+    if ($pv === 'limit') {
+        $lim = isset($dailyRequestLimit) ? (int) $dailyRequestLimit : 0;
+        m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting movies / TV shows per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
+    }
+    m3uServeBlockScreen('Your IP has been blocked due to too many movie / TV show requests.');
+}
 accessLog();
 
 
@@ -98,6 +118,44 @@ $torrentData = [];
 $deleteRDFiles = [];
 
 $userAgent = $_SERVER['HTTP_USER_AGENT'];
+
+// ── IP access control (manual block + per-IP daily rate limit) ───────────
+// Runs before any resolving so a blocked / over-limit viewer never triggers a
+// debrid or AIOStreams round-trip. Both checks are fail-open (a DB hiccup lets
+// playback through rather than locking everyone out). See m3ulisterr_lib.php.
+$clientIp = m3uClientIp();
+if ($clientIp !== '') {
+    // 1) Manual/admin block (from the dashboard Sessions menu) - permanent
+    //    until an admin unblocks the IP.
+    list($ipBlocked, $ipBlockReason) = m3uIpBlockStatus($clientIp);
+    if ($ipBlocked) {
+        m3uServeBlockScreen($ipBlockReason !== '' ? $ipBlockReason
+            : 'Your IP has been blocked due to too many movie / TV show requests.');
+    }
+
+    // 2) Per-IP daily request limits (auto-reset each UTC day). Separate caps
+    //    for movies and TV episodes, plus an optional combined total. Counts
+    //    are per-type; a request is blocked if it would exceed its own type
+    //    limit OR the combined total.
+    $movieLim = isset($dailyMovieLimit) ? (int) $dailyMovieLimit : 0;
+    $episodeLim = isset($dailyEpisodeLimit) ? (int) $dailyEpisodeLimit : 0;
+    $totalLim = isset($dailyRequestLimit) ? (int) $dailyRequestLimit : 0;
+    if ($movieLim > 0 || $episodeLim > 0 || $totalLim > 0) {
+        $mediaKind = ($type === 'series') ? 'series' : 'movie';
+        $typeCount = m3uIpUsageIncrement($clientIp, $mediaKind);
+        $usage = m3uIpUsageToday($clientIp);
+        $typeLim = ($mediaKind === 'series') ? $episodeLim : $movieLim;
+        if ($typeLim > 0 && $typeCount > $typeLim) {
+            m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting '
+                . ($mediaKind === 'series' ? 'TV shows' : 'movies') . ' per day ('
+                . $typeLim . ').', 'Daily limit reached');
+        }
+        if ($totalLim > 0 && $usage['total'] > $totalLim) {
+            m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting movies / TV shows per day ('
+                . $totalLim . ').', 'Daily limit reached');
+        }
+    }
+}
 
 /* FindVideoExtractor("https://filelions.to/v/hjiquphp47la", "filelions", "https://www.primewire.mov", "filelions");
 exit; */

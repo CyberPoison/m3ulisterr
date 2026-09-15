@@ -456,10 +456,63 @@ function m3uIpUsageToday($ip) {
     return $out;
 }
 
-// Serves a full-screen "blocked" notice to the client as an IMAGE (so IPTV /
-// VOD players that expect media on the play.php URL still show something the
-// viewer can read), then exits. Falls back to a plain-text screen when the GD
-// image extension is unavailable. Never returns.
+// Renders the "blocked" notice as a GD true-color image resource (caller owns
+// it - imagedestroy() when done), or null if the GD extension isn't available.
+// Shared by the direct image fallback (m3uServeBlockScreen) and the video
+// pipeline (m3uServeBlockVideo), so both always show identical wording.
+function m3uRenderBlockImage($message, $title = 'Access blocked') {
+    if (!function_exists('imagecreatetruecolor')) {
+        return null;
+    }
+    $message = trim((string) $message);
+    if ($message === '') {
+        $message = 'Your IP has been blocked due to too many movie / TV show requests.';
+    }
+
+    $w = 1280;
+    $h = 720;
+    $img = imagecreatetruecolor($w, $h);
+    $bg = imagecolorallocate($img, 17, 18, 22);      // near-black
+    $accent = imagecolorallocate($img, 229, 57, 53); // red
+    $fg = imagecolorallocate($img, 240, 240, 245);   // off-white
+    $muted = imagecolorallocate($img, 150, 152, 160);
+    imagefilledrectangle($img, 0, 0, $w, $h, $bg);
+    // Top accent bar.
+    imagefilledrectangle($img, 0, 0, $w, 8, $accent);
+
+    // Title (built-in font 5, scaled up by drawing larger via imagestring
+    // is limited; keep it readable and centered).
+    $titleText = strtoupper($title);
+    $tw = imagefontwidth(5) * strlen($titleText);
+    imagestring($img, 5, (int) (($w - $tw) / 2), 250, $titleText, $accent);
+
+    // Word-wrap the message across the middle of the screen.
+    $font = 4;
+    $charW = imagefontwidth($font);
+    $maxChars = (int) (($w - 160) / $charW);
+    $lines = [];
+    foreach (explode("\n", wordwrap($message, $maxChars, "\n", true)) as $ln) {
+        $lines[] = $ln;
+    }
+    $y = 310;
+    foreach ($lines as $ln) {
+        $lw = $charW * strlen($ln);
+        imagestring($img, $font, (int) (($w - $lw) / 2), $y, $ln, $fg);
+        $y += imagefontheight($font) + 8;
+    }
+
+    $footer = 'Contact the administrator if you believe this is a mistake.';
+    $fw = imagefontwidth(2) * strlen($footer);
+    imagestring($img, 2, (int) (($w - $fw) / 2), $h - 60, $footer, $muted);
+
+    return $img;
+}
+
+// Serves a full-screen "blocked" notice to the client as a still IMAGE, then
+// exits. Falls back to a plain-text screen when the GD image extension is
+// unavailable. Used as the last-resort fallback when the video pipeline
+// (m3uServeBlockVideo, below) can't produce a video - e.g. no ffmpeg on the
+// host. Never returns.
 function m3uServeBlockScreen($message, $title = 'Access blocked') {
     // Avoid any caching of the notice by players / CDNs.
     if (!headers_sent()) {
@@ -467,48 +520,8 @@ function m3uServeBlockScreen($message, $title = 'Access blocked') {
         header('Pragma: no-cache');
     }
 
-    $message = trim((string) $message);
-    if ($message === '') {
-        $message = 'Your IP has been blocked due to too many movie / TV show requests.';
-    }
-
-    if (function_exists('imagecreatetruecolor')) {
-        $w = 1280;
-        $h = 720;
-        $img = imagecreatetruecolor($w, $h);
-        $bg = imagecolorallocate($img, 17, 18, 22);      // near-black
-        $accent = imagecolorallocate($img, 229, 57, 53); // red
-        $fg = imagecolorallocate($img, 240, 240, 245);   // off-white
-        $muted = imagecolorallocate($img, 150, 152, 160);
-        imagefilledrectangle($img, 0, 0, $w, $h, $bg);
-        // Top accent bar.
-        imagefilledrectangle($img, 0, 0, $w, 8, $accent);
-
-        // Title (built-in font 5, scaled up by drawing larger via imagestring
-        // is limited; keep it readable and centered).
-        $titleText = strtoupper($title);
-        $tw = imagefontwidth(5) * strlen($titleText);
-        imagestring($img, 5, (int) (($w - $tw) / 2), 250, $titleText, $accent);
-
-        // Word-wrap the message across the middle of the screen.
-        $font = 4;
-        $charW = imagefontwidth($font);
-        $maxChars = (int) (($w - 160) / $charW);
-        $lines = [];
-        foreach (explode("\n", wordwrap($message, $maxChars, "\n", true)) as $ln) {
-            $lines[] = $ln;
-        }
-        $y = 310;
-        foreach ($lines as $ln) {
-            $lw = $charW * strlen($ln);
-            imagestring($img, $font, (int) (($w - $lw) / 2), $y, $ln, $fg);
-            $y += imagefontheight($font) + 8;
-        }
-
-        $footer = 'Contact the administrator if you believe this is a mistake.';
-        $fw = imagefontwidth(2) * strlen($footer);
-        imagestring($img, 2, (int) (($w - $fw) / 2), $h - 60, $footer, $muted);
-
+    $img = m3uRenderBlockImage($message, $title);
+    if ($img !== null) {
         if (!headers_sent()) {
             header('Content-Type: image/jpeg');
         }
@@ -518,10 +531,226 @@ function m3uServeBlockScreen($message, $title = 'Access blocked') {
     }
 
     // No GD: plain-text fallback screen.
+    $message = trim((string) $message);
+    if ($message === '') {
+        $message = 'Your IP has been blocked due to too many movie / TV show requests.';
+    }
     if (!headers_sent()) {
         header('Content-Type: text/plain; charset=utf-8');
     }
     echo strtoupper($title) . "\n\n" . $message . "\n";
+    exit();
+}
+
+// ---------------------------------------------------------------------------
+// Block VIDEO: the actual notice most players/viewers see. A still JPEG is
+// technically a valid response, but many IPTV/VOD apps flash it for a split
+// second (or fail to render a bare image at all) since they expect an actual
+// video stream at a play.php-style URL - not enough time for anyone to read
+// why they were blocked. So the notice is instead delivered as a real
+// ~10-minute H.264 MP4 (the wrapped GD notice image, held for the full
+// duration, with a silent audio track for player compatibility), which any
+// video player displays and holds on screen long enough to read.
+//
+// Generation is cached to disk (keyed by the exact wording, so admins editing
+// the block reason automatically get a freshly rendered video) under the
+// public, persistent videos/ directory - the same directory already used for
+// the how-to video, and mounted as a durable Docker volume so cached notice
+// videos survive redeploys. A file lock prevents duplicate concurrent ffmpeg
+// runs when several requests hit a freshly-blocked IP at once. Falls back to
+// the still-image screen (m3uServeBlockScreen) if ffmpeg/GD is unavailable or
+// encoding fails/times out, so a broken host never leaves the viewer with
+// nothing at all.
+// ---------------------------------------------------------------------------
+
+define('M3U_BLOCK_VIDEO_SECONDS', 600); // 10 minutes
+define('M3U_BLOCK_VIDEO_VERSION', 'v1'); // bump to invalidate all cached videos
+
+// Locates the ffmpeg binary. `command -v` alone can miss it under PHP-FPM,
+// whose worker PATH is often a bare minimal default (no /opt/homebrew/bin,
+// /usr/local/bin, etc.) even though the same binary works fine from a shell -
+// so this also tries the common absolute install locations, the same
+// resilience pattern as m3uFindPhpCli() in dashboard.php.
+function m3uFindFfmpeg() {
+    static $cached = null;
+    if ($cached !== null) {
+        return $cached;
+    }
+    $c = trim((string) @shell_exec('command -v ffmpeg 2>/dev/null'));
+    if ($c !== '' && @is_executable($c)) {
+        return $cached = $c;
+    }
+    foreach (['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg'] as $p) {
+        if (@is_executable($p)) {
+            return $cached = $p;
+        }
+    }
+    return $cached = '';
+}
+
+function m3uBlockVideoDir() {
+    $dir = __DIR__ . '/videos/blocked';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0755, true);
+    }
+    return is_dir($dir) ? $dir : null;
+}
+
+// Removes the oldest cached notice videos once the cache grows past $keep
+// distinct messages, so an admin who cycles through many custom block reasons
+// over time doesn't accumulate mp4s forever. Cheap and rarely triggered.
+function m3uPruneBlockVideos($dir, $keep = 50) {
+    $files = glob($dir . '/*.mp4');
+    if (!is_array($files) || count($files) <= $keep) {
+        return;
+    }
+    usort($files, function ($a, $b) { return filemtime($a) <=> filemtime($b); });
+    foreach (array_slice($files, 0, count($files) - $keep) as $old) {
+        @unlink($old);
+    }
+}
+
+// Runs ffmpeg with a hard wall-clock deadline (macOS/some minimal images lack
+// the `timeout` binary, so this is done in PHP with proc_open). Returns true
+// on a clean exit(0), false otherwise (including on timeout, where the process
+// is force-killed so it never lingers).
+function m3uRunWithDeadline(array $cmd, $deadlineSeconds) {
+    $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $proc = @proc_open($cmd, $descriptors, $pipes);
+    if (!is_resource($proc)) {
+        return false;
+    }
+    fclose($pipes[0]);
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+
+    $deadline = microtime(true) + $deadlineSeconds;
+    do {
+        $status = proc_get_status($proc);
+        if (!$status['running']) {
+            break;
+        }
+        usleep(100000); // 100ms
+    } while (microtime(true) < $deadline);
+
+    $status = proc_get_status($proc);
+    $ok = false;
+    if ($status['running']) {
+        // Timed out - SIGKILL so a stuck ffmpeg never lingers (proc_close
+        // alone can block for minutes on a wedged child, as seen with the
+        // parallel ffprobe duration checks elsewhere in this codebase).
+        @proc_terminate($proc, 9);
+        usleep(200000);
+    } else {
+        $ok = ($status['exitcode'] === 0);
+    }
+    foreach ($pipes as $p) {
+        if (is_resource($p)) {
+            @fclose($p);
+        }
+    }
+    @proc_close($proc);
+    return $ok;
+}
+
+// Serves the ~10-minute notice video for $message/$title, generating and
+// caching it on first use, then exits (redirects to the cached static file so
+// Apache - not PHP - handles Range/seek requests, the same pattern already
+// used for the how-to video). Falls back to the still-image screen if a video
+// can't be produced. Never returns.
+function m3uServeBlockVideo($message, $title = 'Access blocked') {
+    $message = trim((string) $message);
+    if ($message === '') {
+        $message = 'Your IP has been blocked due to too many movie / TV show requests.';
+    }
+
+    $dir = m3uBlockVideoDir();
+    if ($dir === null) {
+        m3uServeBlockScreen($message, $title); // exits
+    }
+
+    $hash = substr(sha1(M3U_BLOCK_VIDEO_VERSION . '|' . $title . '|' . $message), 0, 24);
+    $path = $dir . '/' . $hash . '.mp4';
+
+    if (is_file($path) && filesize($path) > 0) {
+        m3uRedirectToBlockVideo($path); // exits
+    }
+
+    // Not cached yet - generate it. A lock prevents a stampede of concurrent
+    // ffmpeg runs when several requests hit a freshly-blocked IP at once.
+    $lockPath = $path . '.lock';
+    $lockFp = @fopen($lockPath, 'c');
+    if ($lockFp && flock($lockFp, LOCK_EX)) {
+        // Another request may have finished generating it while we waited.
+        if (is_file($path) && filesize($path) > 0) {
+            flock($lockFp, LOCK_UN);
+            fclose($lockFp);
+            m3uRedirectToBlockVideo($path); // exits
+        }
+
+        $ffmpegPath = m3uFindFfmpeg();
+        $img = ($ffmpegPath !== '') ? m3uRenderBlockImage($message, $title) : null;
+
+        if ($img !== null) {
+            $imgPath = $dir . '/' . $hash . '.src.jpg';
+            imagejpeg($img, $imgPath, 92);
+            imagedestroy($img);
+
+            $tmpPath = $path . '.tmp-' . getmypid() . '.mp4';
+            $cmd = [
+                $ffmpegPath, '-y',
+                // The framerate MUST be set on the image INPUT (-framerate),
+                // not as an output-side -r filter: the latter forces ffmpeg
+                // through a frame-duplication/rate-conversion path that is
+                // ~4x slower for a long loop of one still image (measured
+                // ~19s vs ~6s for a 600s encode) for identical output.
+                '-framerate', '5', '-loop', '1', '-i', $imgPath,
+                '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+                '-t', (string) M3U_BLOCK_VIDEO_SECONDS,
+                // No scale/pad filter needed - m3uRenderBlockImage() always
+                // produces an exact 1280x720 source image.
+                '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'stillimage', '-crf', '30',
+                '-pix_fmt', 'yuv420p', '-g', '50',
+                '-c:a', 'aac', '-b:a', '48k',
+                '-movflags', '+faststart',
+                $tmpPath,
+            ];
+            // Encoding a static image is cheap (a few seconds), but never let
+            // a wedged ffmpeg hold the viewer's request open indefinitely -
+            // fall back to the still image instead.
+            $ok = m3uRunWithDeadline($cmd, 25);
+            @unlink($imgPath);
+
+            if ($ok && is_file($tmpPath) && filesize($tmpPath) > 0) {
+                @rename($tmpPath, $path);
+                m3uPruneBlockVideos($dir);
+                flock($lockFp, LOCK_UN);
+                fclose($lockFp);
+                m3uRedirectToBlockVideo($path); // exits
+            }
+            @unlink($tmpPath);
+        }
+
+        flock($lockFp, LOCK_UN);
+        fclose($lockFp);
+    }
+
+    // ffmpeg missing, GD missing, or encoding failed/timed out - never leave
+    // the viewer with nothing.
+    m3uServeBlockScreen($message, $title); // exits
+}
+
+// Redirects to a cached notice video so Apache serves the static file
+// directly (native Range/seek support, no PHP in the streaming path). Never
+// returns.
+function m3uRedirectToBlockVideo($path) {
+    if (!headers_sent()) {
+        header('Cache-Control: no-store, no-cache, must-revalidate');
+        header('Pragma: no-cache');
+    }
+    $rel = 'videos/blocked/' . basename($path);
+    $url = function_exists('locateBaseURL') ? (locateBaseURL() . $rel) : ('/' . $rel);
+    header('Location: ' . $url, true, 302);
     exit();
 }
 

@@ -12,22 +12,24 @@ require_once 'debrid.php';
 
 // Dashboard "preview" of the block screen: lets an admin see exactly what a
 // blocked / rate-limited viewer is served. No auth needed - it only renders a
-// static notice image and reveals nothing sensitive.
+// notice video (or the still-image fallback) and reveals nothing sensitive.
+// Add &raw=1 to preview the still-image fallback directly instead of the video.
 if (isset($_GET['previewBlock'])) {
     $pv = strtolower((string) $_GET['previewBlock']);
+    $serve = (isset($_GET['raw']) && $_GET['raw'] !== '0') ? 'm3uServeBlockScreen' : 'm3uServeBlockVideo';
     if ($pv === 'movie' || $pv === 'movies') {
         $lim = isset($dailyMovieLimit) ? (int) $dailyMovieLimit : 0;
-        m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting movies per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
+        $serve('Blocked: you reached the maximum limit of requesting movies per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
     }
     if ($pv === 'episode' || $pv === 'episodes' || $pv === 'series') {
         $lim = isset($dailyEpisodeLimit) ? (int) $dailyEpisodeLimit : 0;
-        m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting TV shows per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
+        $serve('Blocked: you reached the maximum limit of requesting TV shows per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
     }
     if ($pv === 'limit') {
         $lim = isset($dailyRequestLimit) ? (int) $dailyRequestLimit : 0;
-        m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting movies / TV shows per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
+        $serve('Blocked: you reached the maximum limit of requesting movies / TV shows per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
     }
-    m3uServeBlockScreen('Your IP has been blocked due to too many movie / TV show requests.');
+    $serve('Your IP has been blocked due to too many movie / TV show requests.');
 }
 accessLog();
 
@@ -129,7 +131,7 @@ if ($clientIp !== '') {
     //    until an admin unblocks the IP.
     list($ipBlocked, $ipBlockReason) = m3uIpBlockStatus($clientIp);
     if ($ipBlocked) {
-        m3uServeBlockScreen($ipBlockReason !== '' ? $ipBlockReason
+        m3uServeBlockVideo($ipBlockReason !== '' ? $ipBlockReason
             : 'Your IP has been blocked due to too many movie / TV show requests.');
     }
 
@@ -146,12 +148,12 @@ if ($clientIp !== '') {
         $usage = m3uIpUsageToday($clientIp);
         $typeLim = ($mediaKind === 'series') ? $episodeLim : $movieLim;
         if ($typeLim > 0 && $typeCount > $typeLim) {
-            m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting '
+            m3uServeBlockVideo('Blocked: you reached the maximum limit of requesting '
                 . ($mediaKind === 'series' ? 'TV shows' : 'movies') . ' per day ('
                 . $typeLim . ').', 'Daily limit reached');
         }
         if ($totalLim > 0 && $usage['total'] > $totalLim) {
-            m3uServeBlockScreen('Blocked: you reached the maximum limit of requesting movies / TV shows per day ('
+            m3uServeBlockVideo('Blocked: you reached the maximum limit of requesting movies / TV shows per day ('
                 . $totalLim . ').', 'Daily limit reached');
         }
     }

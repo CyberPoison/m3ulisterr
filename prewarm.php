@@ -20,14 +20,32 @@
 //   php prewarm.php --file=ids.txt [--workers=6] [--limit=500]
 //   php prewarm.php --playlist=top --limit=300         # newest N from playlist.json
 //   php prewarm.php --series=1396:1:1,66732:4:1         # series as tmdbId:season:episode
+//   php prewarm.php --expiring[=N]                      # re-warm expired/expiring durable-cache entries
 //
 // Options:
 //   --base=http://127.0.0.1   server base URL (default localhost)
 //   --accounts=...            comma list of account usernames (default Unlimited)
+//                             ignored for --expiring targets, which always reuse
+//                             the exact account they were originally resolved under
 //   --workers=N               parallel resolves (default 6)
-//   --limit=N                 cap how many titles to process
+//   --limit=N                 cap how many titles to process (applies to the
+//                             combined target list, --expiring entries first)
 //   --skip-cached=1           skip titles already resolved (default 1)
 //   --dry-run=1               list what would be done, resolve nothing
+//
+// --expiring[=N]: pulls targets straight from the durable resolved_cache store
+// (m3ulisterr_lib.php) instead of a static list - every 'resolved' entry that
+// has ALREADY expired, or will expire within the next N minutes (N omitted or
+// 0 = already-expired only). This is how previously-watched or previously-
+// prewarmed titles stay continuously warm via cron, rather than only ever
+// refreshing a fixed curated list: as real viewers (or earlier prewarm runs)
+// resolve titles, those become the pool --expiring keeps fresh. Each is
+// re-resolved under the SAME account/language it was originally resolved
+// with (stored per-row - a French resolve stays French), never cross-
+// multiplied across --accounts=. A sensible cron pairing is --expiring=<N
+// comfortably more than half the cron interval, so nothing goes cold in the
+// gap between runs> alongside a modest --playlist=top to keep seeding newly
+// popular titles nobody has watched yet.
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
@@ -36,7 +54,7 @@ if (PHP_SAPI !== 'cli') {
 
 error_reporting(E_ALL & ~E_DEPRECATED);
 
-$opts = getopt('', ['ids::', 'file::', 'playlist::', 'series::', 'base::', 'accounts::', 'workers::', 'limit::', 'skip-cached::', 'dry-run::']);
+$opts = getopt('', ['ids::', 'file::', 'playlist::', 'series::', 'expiring::', 'base::', 'accounts::', 'workers::', 'limit::', 'skip-cached::', 'dry-run::']);
 
 $base = rtrim($opts['base'] ?? 'http://127.0.0.1', '/');
 $accounts = array_filter(array_map('trim', explode(',', $opts['accounts'] ?? 'Unlimited')));
@@ -45,8 +63,49 @@ $limit = isset($opts['limit']) ? (int) $opts['limit'] : 0;
 $skipCached = ($opts['skip-cached'] ?? '1') !== '0';
 $dryRun = isset($opts['dry-run']) && $opts['dry-run'] !== '0';
 
-// ---- Build the work list: each item is [type, movieId, data-or-null, label] ----
+// ---- Build the work list: each item is [type, movieId, data-or-null, label]
+//      plus an optional 5th element forcing one specific account (used only
+//      by --expiring, so a re-warm always reuses the account/language the
+//      entry was originally resolved under instead of the --accounts= list).
 $targets = [];
+
+// --expiring goes FIRST: under --limit, already-warm-but-going-stale titles
+// (proven real demand) take priority over speculative --playlist=top seeding.
+if (isset($opts['expiring'])) {
+    require_once __DIR__ . '/config.php';
+    require_once __DIR__ . '/m3ulisterr_lib.php';
+    $expiringWindowMin = is_numeric($opts['expiring']) ? max(0, (int) $opts['expiring']) : 0;
+    $expiringCutoff = time() + ($expiringWindowMin * 60);
+    $edb = m3uCacheDb();
+    if ($edb === null) {
+        fwrite(STDERR, "--expiring: durable cache store unavailable, skipping.\n");
+    } else {
+        try {
+            $rows = $edb->query('SELECT cache_key, movie_id, username, media_type FROM resolved_cache
+                WHERE status = \'resolved\' AND expires <= ' . (int) $expiringCutoff . '
+                ORDER BY expires ASC')->fetchAll();
+        } catch (Throwable $e) {
+            $rows = [];
+        }
+        foreach ($rows as $r) {
+            $movieId = (int) ($r['movie_id'] ?? 0);
+            if ($movieId <= 0) {
+                continue;
+            }
+            $account = ($r['username'] !== '' && $r['username'] !== null) ? $r['username'] : 'Unlimited';
+            if (($r['media_type'] ?? '') === 'series' && preg_match('/_series_s(\d+)e(\d+)_url$/', (string) $r['cache_key'], $m)) {
+                $season = (int) $m[1];
+                $episode = (int) $m[2];
+                $data = base64_encode("tt0:{$movieId}/season/{$season}/episode/{$episode}");
+                $targets[] = ['series', (string) $movieId, $data, "series $movieId S{$season}E{$episode} (expiring)", $account];
+            } else {
+                $targets[] = ['movie', (string) $movieId, null, "movie $movieId (expiring)", $account];
+            }
+        }
+        fwrite(STDERR, "--expiring: " . count($rows) . " durable-cache entr" . (count($rows) === 1 ? 'y' : 'ies')
+            . " expired or expiring within {$expiringWindowMin}m.\n");
+    }
+}
 
 if (!empty($opts['ids'])) {
     foreach (array_filter(array_map('trim', explode(',', $opts['ids']))) as $id) {
@@ -88,7 +147,7 @@ if (($opts['playlist'] ?? '') === 'top') {
 }
 
 if (empty($targets)) {
-    fwrite(STDERR, "No targets. Pass --ids=, --file=, --series= or --playlist=top.\n");
+    fwrite(STDERR, "No targets. Pass --ids=, --file=, --series=, --playlist=top or --expiring.\n");
     exit(1);
 }
 
@@ -96,10 +155,14 @@ if ($limit > 0) {
     $targets = array_slice($targets, 0, $limit);
 }
 
-// Expand each target across the requested accounts.
+// Expand each target across the requested accounts - EXCEPT a target
+// carrying its own forced account (the 5th element, used by --expiring),
+// which always re-warms under that exact account/language only.
 $jobs = [];
-foreach ($targets as [$type, $movieId, $data, $label]) {
-    foreach ($accounts as $account) {
+foreach ($targets as $t) {
+    [$type, $movieId, $data, $label] = $t;
+    $accountsForThis = isset($t[4]) ? [$t[4]] : $accounts;
+    foreach ($accountsForThis as $account) {
         // &prewarm=1 tags the resolved SQLite row as prewarmed so the dashboard
         // can show what was warmed ahead of time vs resolved by real viewers.
         $url = $type === 'series'
@@ -110,8 +173,8 @@ foreach ($targets as [$type, $movieId, $data, $label]) {
 }
 
 $total = count($jobs);
-fwrite(STDERR, "Prewarm: $total resolve(s) across " . count($targets) . " title(s) x " . count($accounts)
-    . " account(s), $workers workers, base=$base" . ($dryRun ? " [DRY RUN]\n" : "\n"));
+fwrite(STDERR, "Prewarm: $total resolve(s) from " . count($targets) . " target(s), $workers workers, base=$base"
+    . ($dryRun ? " [DRY RUN]\n" : "\n"));
 
 if ($dryRun) {
     foreach ($jobs as $j) {

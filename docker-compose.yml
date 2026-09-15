@@ -29,8 +29,14 @@ services:
       # Cron schedule (run a little more often than $expirationHours in
       # config.php, default 3h, so warmed titles never go cold):
       - "PREWARM_SCHEDULE=0 */2 * * *"
-      # Arguments passed to prewarm.php (see that file's header for all options):
-      - "PREWARM_ARGS=--playlist=top --limit=400 --accounts=Unlimited,UnlimitedFR --base=http://127.0.0.1 --workers=8"
+      # Arguments passed to prewarm.php (see that file's header for all options).
+      # --expiring=150 re-warms durable-cache entries that have already expired
+      # or will within the next 150min - comfortably more than the 120min gap
+      # between runs above, so a previously-watched/prewarmed title never goes
+      # cold between cron ticks. --playlist=top still seeds newly popular
+      # titles nobody has resolved yet; --expiring runs first and takes
+      # priority under --limit (proven demand beats speculative seeding).
+      - "PREWARM_ARGS=--expiring=150 --playlist=top --limit=400 --accounts=Unlimited,UnlimitedFR --base=http://127.0.0.1 --workers=8"
     # /dev/shm backs the HLS segment/init RAM cache (see getRamCacheDir() in
     # hls_shared.php) - Docker's default is only 64MB, which can't even hold
     # one segment of a high-bitrate remux (a 90Mbps title needs ~120MB just

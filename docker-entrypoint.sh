@@ -23,7 +23,7 @@ fi
 # PREWARM_ENABLED=true (see docker-compose.yml for the tunables).
 if [ "${PREWARM_ENABLED}" = "true" ] || [ "${PREWARM_ENABLED}" = "1" ]; then
     SCHEDULE="${PREWARM_SCHEDULE:-0 */2 * * *}"
-    ARGS="${PREWARM_ARGS:---playlist=top --limit=400 --accounts=Unlimited,UnlimitedFR --base=http://127.0.0.1 --workers=8}"
+    ARGS="${PREWARM_ARGS:---expiring=150 --playlist=top --limit=400 --accounts=Unlimited,UnlimitedFR --base=http://127.0.0.1 --workers=8}"
     touch /var/log/m3u-prewarm.log
     chown www-data:www-data /var/log/m3u-prewarm.log || true
     # /etc/cron.d format: "<schedule> <user> <command>"; must be 0644 and end

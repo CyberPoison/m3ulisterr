@@ -10,6 +10,18 @@ require_once 'config.php';
 require_once 'm3ulisterr_lib.php';
 require_once 'debrid.php';
 
+// MUST be defined here, at the very top - NOT down next to fetchAioStreamsList()
+// where it conceptually belongs. This is a single top-to-bottom script: a
+// define() only takes effect once the interpreter's execution pointer
+// physically reaches that line, and every real request calls straight into
+// movieDetails_TMDB()/seriesDetails_TMDB() within the first ~150 lines, which
+// resolves and exit()s from deep inside itself - the script's top-level flow
+// never lives long enough to fall through to a define() placed later in the
+// file. Confirmed in production: every AIOStreams resolve hit "Uncaught
+// Error: Undefined constant AIO_LIST_CACHE_TTL" at the exact line that used
+// it, because that request never ran past this point at file-scope.
+define('AIO_LIST_CACHE_TTL', 600);
+
 // Dashboard "preview" of the block screen: lets an admin see exactly what a
 // blocked / rate-limited viewer is served. No auth needed - it only renders a
 // notice stream (or the still-image fallback) and reveals nothing sensitive.
@@ -4564,8 +4576,8 @@ function aioListCacheDir() {
 // short so a debrid cache-status change (a torrent finishing caching) is picked
 // up soon; a stale "cached" marker only costs one failed playability check that
 // then falls through to the next candidate, so it is never wrong, just briefly
-// suboptimal.
-define('AIO_LIST_CACHE_TTL', 600);
+// suboptimal. AIO_LIST_CACHE_TTL is defined at the very top of this file, not
+// here - see the comment there for why.
 
 function fetchAioStreamsList($url) {
     $dir = aioListCacheDir();

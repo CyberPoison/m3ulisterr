@@ -178,6 +178,15 @@ https://github.com/user-attachments/assets/c6af6149-c170-45fc-a6ac-32edd1b3405b
 
 # Πίνακας ελέγχου analytics M3uListerr
 
+### Dashboard Screenshots
+
+![Overview](wiki/Overview.png)
+![Globe](wiki/Globe.png)
+![Sessions](wiki/Sessions.png)
+![Titles](wiki/Titles.png)
+![Cache Logs](wiki/cache%20logs.png)
+
+
 Το `dashboard.php` είναι ένας αυτόνομος πίνακας ελέγχου analytics και διαχείρισης, προστατευμένος με σύνδεση για τον διακομιστή. Καταγράφει ένα ελαφρύ γεγονός ανά αναπαραγωγή (γεγονότα resolve, playlist, segment, subtitle και proxy) σε ένα ιδιωτικό αρχείο καταγραφής, τα εισάγει σε μια τοπική βάση δεδομένων SQLite, και τα αποδίδει ως έναν σύγχρονο πίνακα ελέγχου.
 
 ### Τι δείχνει

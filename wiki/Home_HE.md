@@ -109,3 +109,14 @@
   ```
 
 [![תמונת סרטון](https://raw.githubusercontent.com/gogetta69/TMDB-To-VOD-Playlist/main/images/thumb.PNG)](https://rumble.com/embed/v54v3nx/?pub=4)
+
+
+
+### Dashboard Screenshots
+
+![Overview](Overview.png)
+![Globe](Globe.png)
+![Sessions](Sessions.png)
+![Titles](Titles.png)
+![Cache Logs](cache%20logs.png)
+

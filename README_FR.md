@@ -179,6 +179,15 @@ Les variables d'environnement suivantes peuvent être utilisées pour configurer
 
 # Tableau de bord analytique M3uListerr
 
+### Dashboard Screenshots
+
+![Overview](wiki/Overview.png)
+![Globe](wiki/Globe.png)
+![Sessions](wiki/Sessions.png)
+![Titles](wiki/Titles.png)
+![Cache Logs](wiki/cache%20logs.png)
+
+
 `dashboard.php` est un panneau de contrôle et d'analyse autonome, protégé par connexion, pour le serveur. Il enregistre un événement léger par lecture (événements de résolution, liste de lecture, segment, sous-titre et proxy) dans un journal privé, les importe dans une base de données SQLite locale, et les restitue sous forme d'un tableau de bord moderne.
 
 ### Ce qu'il montre

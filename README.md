@@ -186,6 +186,15 @@ The following environment variables can be used to configure the container:
 
 # M3uListerr Analytics Dashboard
 
+### Dashboard Screenshots
+
+![Overview](wiki/Overview.png)
+![Globe](wiki/Globe.png)
+![Sessions](wiki/Sessions.png)
+![Titles](wiki/Titles.png)
+![Cache Logs](wiki/cache%20logs.png)
+
+
 `dashboard.php` is a self-contained, login-protected analytics and control panel for the server. It records one lightweight event per playback (resolve, playlist, segment, subtitle and proxy events) to a private log, imports them into a local SQLite database, and renders them as a modern dashboard.
 
 ### What it shows

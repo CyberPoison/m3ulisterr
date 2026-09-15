@@ -1,0 +1,12 @@
+.git
+.gitignore
+.github
+README*.md
+wiki/
+images/
+docs/
+m3ulisterr_data/
+cache.json
+sessions/
+videos/
+channels/

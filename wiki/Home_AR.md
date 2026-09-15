@@ -79,3 +79,14 @@ docker-compose logs -f
 
 ---
 *ملاحظة: هذا المشروع مخصص للأغراض التعليمية ولتسهيل الوصول إلى المحتوى. يرجى احترام قوانين حقوق الطبع والنشر.*
+
+
+
+### Dashboard Screenshots
+
+![Overview](Overview.png)
+![Globe](Globe.png)
+![Sessions](Sessions.png)
+![Titles](Titles.png)
+![Cache Logs](cache%20logs.png)
+

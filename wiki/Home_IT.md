@@ -68,3 +68,14 @@ Per avviarla:
 1. Distribuisci i file come al solito (la dashboard non richiede altre configurazioni).
 2. Assicurati che l'app possa creare una directory scrivibile `m3ulisterr_data/` accanto al sito (viene creata automaticamente se possibile).
 3. Apri `http://TUO_SERVER/dashboard.php`, crea l'account amministratore e accedi. I dati vengono importati al primo caricamento e ogni volta che premi **Aggiorna dati**.
+
+
+
+### Dashboard Screenshots
+
+![Overview](Overview.png)
+![Globe](Globe.png)
+![Sessions](Sessions.png)
+![Titles](Titles.png)
+![Cache Logs](cache%20logs.png)
+

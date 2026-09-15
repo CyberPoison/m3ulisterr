@@ -178,6 +178,15 @@ https://github.com/user-attachments/assets/c6af6149-c170-45fc-a6ac-32edd1b3405b
 
 # لوحة تحكم تحليلات M3uListerr
 
+### Dashboard Screenshots
+
+![Overview](wiki/Overview.png)
+![Globe](wiki/Globe.png)
+![Sessions](wiki/Sessions.png)
+![Titles](wiki/Titles.png)
+![Cache Logs](wiki/cache%20logs.png)
+
+
 `dashboard.php` عبارة عن لوحة تحكم وتحليلات مستقلة ومحمية بتسجيل دخول للخادم. إنها تسجل حدثًا خفيفًا واحدًا لكل تشغيل (أحداث الدقة، وقائمة التشغيل، والمقاطع، والترجمة، والوكيل) في سجل خاص، وتستوردها إلى قاعدة بيانات SQLite محلية، وتعرضها كلوحة معلومات حديثة.
 
 ### ماذا تعرض

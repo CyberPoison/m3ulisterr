@@ -74,3 +74,14 @@ Uma vez que o projeto esteja rodando, você pode acessar seu Dashboard Analític
 - **Sessões ao vivo e Tabela**: Veja exatamente o título sendo reproduzido, a conta em uso, resolução de tempo e progresso (`h:mm:ss`).
 - **Gerenciador de Configurações (Commands & Config)**: Você pode editar configurações essenciais do `config.php` diretamente pelo navegador de forma segura. O sistema verifica a sintaxe (syntax check) antes de aplicar.
 - **Segurança Reforçada**: Tudo fica contido na pasta `m3ulisterr_data/`, usando banco SQLite protegido contra acesso público.
+
+
+
+### Dashboard Screenshots
+
+![Overview](Overview.png)
+![Globe](Globe.png)
+![Sessions](Sessions.png)
+![Titles](Titles.png)
+![Cache Logs](cache%20logs.png)
+

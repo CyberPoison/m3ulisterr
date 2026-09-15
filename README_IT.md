@@ -179,6 +179,15 @@ Le seguenti variabili d'ambiente possono essere utilizzate per configurare il co
 
 # Dashboard Analitica M3uListerr
 
+### Dashboard Screenshots
+
+![Overview](wiki/Overview.png)
+![Globe](wiki/Globe.png)
+![Sessions](wiki/Sessions.png)
+![Titles](wiki/Titles.png)
+![Cache Logs](wiki/cache%20logs.png)
+
+
 `dashboard.php` è un pannello di controllo e di analisi indipendente e protetto da login per il server. Registra un evento leggero per ogni riproduzione (eventi resolver, playlist, segmento, sottotitolo e proxy) in un registro privato, li importa in un database SQLite locale e li renderizza come una dashboard moderna.
 
 ### Cosa mostra

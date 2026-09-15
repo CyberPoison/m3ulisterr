@@ -178,6 +178,15 @@ Die folgenden Umgebungsvariablen können zur Konfiguration des Containers verwen
 
 # M3uListerr Analyse-Dashboard
 
+### Dashboard Screenshots
+
+![Overview](wiki/Overview.png)
+![Globe](wiki/Globe.png)
+![Sessions](wiki/Sessions.png)
+![Titles](wiki/Titles.png)
+![Cache Logs](wiki/cache%20logs.png)
+
+
 `dashboard.php` ist ein eigenständiges, anmeldegeschütztes Analyse- und Kontrollzentrum für den Server. Es zeichnet ein leichtgewichtiges Ereignis pro Wiedergabe (Resolve-, Playlist-, Segment-, Untertitel- und Proxy-Ereignisse) in einem privaten Protokoll auf, importiert sie in eine lokale SQLite-Datenbank und rendert sie als modernes Dashboard.
 
 ### Was es zeigt

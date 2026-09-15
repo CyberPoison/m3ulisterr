@@ -171,6 +171,15 @@ https://github.com/user-attachments/assets/c6af6149-c170-45fc-a6ac-32edd1b3405b
 - `HEADLESSVIDX_ADDRESS`: כתובת שירות ה-HeadlessVidX (ברירת מחדל: `localhost:3202`).
 
 # לוח בקרה M3uListerr
+
+### Dashboard Screenshots
+
+![Overview](wiki/Overview.png)
+![Globe](wiki/Globe.png)
+![Sessions](wiki/Sessions.png)
+![Titles](wiki/Titles.png)
+![Cache Logs](wiki/cache%20logs.png)
+
 `dashboard.php` הוא לוח בקרה פנימי עם התחברות לניתוח נתונים ושליטה. הוא רושם כל ניגון ללוג פרטי המיובא ל-SQLite ומציג דשבורד מודרני.
 
 ### מה זה מציג

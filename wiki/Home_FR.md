@@ -74,3 +74,14 @@ Vous pouvez utiliser la variable suivante pour configurer le conteneur :
 - Paramètres d'URL spécifiques :
   - **VOD en Français** : Utilisez le chemin français dédié avec `?lang=fr` ou le nom de compte `UnlimitedFR`.
   - **Codec spécifique** : Utilisez `?codec=x265` pour basculer vers une échelle de qualité privilégiant le HEVC.
+
+
+
+### Dashboard Screenshots
+
+![Overview](Overview.png)
+![Globe](Globe.png)
+![Sessions](Sessions.png)
+![Titles](Titles.png)
+![Cache Logs](cache%20logs.png)
+

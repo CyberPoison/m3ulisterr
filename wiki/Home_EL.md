@@ -52,3 +52,14 @@ docker-compose up -d
 </table>
 
 - **Δημιουργία Λίστας Αναπαραγωγής (Playlist)**: Οι λίστες δημιουργούνται αυτόματα δύο φορές την ημέρα μέσω ενός GitHub Workflow (δεν χρειάζεται πλέον να εκτελείτε χειροκίνητα τα script). Για να δημιουργήσετε τη δική σας λίστα, ρυθμίστε το `$userCreatePlaylist` σε `true` στο αρχείο `config.php`.
+
+
+
+### Dashboard Screenshots
+
+![Overview](Overview.png)
+![Globe](Globe.png)
+![Sessions](Sessions.png)
+![Titles](Titles.png)
+![Cache Logs](cache%20logs.png)
+

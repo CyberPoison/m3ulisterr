@@ -44,7 +44,17 @@ function m3uSecurityHeaders(string $nonce): void {
         . "default-src 'none'; "
         . "script-src 'self' 'nonce-$nonce'; "
         . "style-src 'self' 'unsafe-inline'; "
-        . "img-src 'self' https://image.tmdb.org data:; "
+        // Adult movie posters come from adult-movies.json (third-party data,
+        // not TMDB) and are hotlinked directly rather than proxied, so their
+        // CDN hosts need an explicit img-src allowance too - this is the
+        // fixed set actually present in that file today (theporndb.net is
+        // the vast majority). If the playlist source ever changes, add the
+        // new host here rather than widening this to a wildcard.
+        . "img-src 'self' https://image.tmdb.org data: "
+        . "https://cdn.theporndb.net https://nsnetworkmembers.newsensations.com "
+        . "https://imgs1cdn.adultempire.com https://www.excaliburfilms.com "
+        . "https://images.excaliburfilms.com https://static.sexvideoall.com "
+        . "https://tour.combatzonexxx.com https://images02-openlife.gammacdn.com; "
         . "connect-src 'self'; "
         . "font-src 'self'; "
         . "base-uri 'none'; "
@@ -143,6 +153,12 @@ function m3uMigrate(PDO $db): void {
         movie_id INTEGER PRIMARY KEY, media_type TEXT, title TEXT, year TEXT,
         poster TEXT, overview TEXT, updated INTEGER
     )');
+    // Title/poster for adult content, sourced from adult-movies.json (its ids
+    // are NOT real TMDB ids - a separate table, never queried against TMDB).
+    // See m3uImportAdultMeta().
+    $db->exec('CREATE TABLE IF NOT EXISTS adult_meta (
+        movie_id INTEGER PRIMARY KEY, title TEXT, poster TEXT, updated INTEGER
+    )');
     $db->exec('CREATE TABLE IF NOT EXISTS cache_entries (
         cache_key TEXT PRIMARY KEY, value TEXT, added INTEGER, expires INTEGER, status TEXT
     )');
@@ -153,13 +169,20 @@ function m3uMigrate(PDO $db): void {
         cache_key TEXT PRIMARY KEY, value TEXT, status TEXT, added INTEGER, expires INTEGER,
         prewarmed INTEGER DEFAULT 0, movie_id INTEGER, username TEXT, lang TEXT, media_type TEXT, updated INTEGER
     )');
-    // IP access control (manual blocks + per-IP daily rate-limit counter).
-    // Mirrors the schema created in m3uCacheDb() (m3ulisterr_lib.php).
+    // IP access control (manual blocks, whitelist, and the per-IP daily
+    // rate-limit counters). Mirrors the schema created in m3uCacheDb()
+    // (m3ulisterr_lib.php).
     $db->exec('CREATE TABLE IF NOT EXISTS blocked_ips (
         ip TEXT PRIMARY KEY, reason TEXT, auto INTEGER DEFAULT 0, created INTEGER
     )');
+    $db->exec('CREATE TABLE IF NOT EXISTS whitelisted_ips (
+        ip TEXT PRIMARY KEY, note TEXT, created INTEGER
+    )');
     $db->exec('CREATE TABLE IF NOT EXISTS ip_daily (
         ip TEXT, day TEXT, count INTEGER DEFAULT 0, PRIMARY KEY (ip, day)
+    )');
+    $db->exec('CREATE TABLE IF NOT EXISTS ip_usage (
+        ip TEXT, day TEXT, media_type TEXT, count INTEGER DEFAULT 0, PRIMARY KEY (ip, day, media_type)
     )');
 }
 
@@ -400,11 +423,16 @@ function m3uImportGeo(PDO $db): int {
 }
 
 // Fetch title/poster/overview for movie ids seen but not yet looked up.
+// Excludes adult-range ids entirely - they are not real TMDB ids (see
+// M3U_ADULT_ID_THRESHOLD), so looking them up against TMDB would only ever
+// waste a request; m3uImportAdultMeta() below handles those instead.
 function m3uImportTmdb(PDO $db): int {
     if (!isset($GLOBALS['apiKey']) || $GLOBALS['apiKey'] === '') {
         return 0;
     }
-    $rows = $db->query("SELECT DISTINCT movie_id, media_type FROM events WHERE movie_id IS NOT NULL AND movie_id > 0 AND movie_id NOT IN (SELECT movie_id FROM tmdb_meta) LIMIT 20")->fetchAll();
+    $rows = $db->query('SELECT DISTINCT movie_id, media_type FROM events
+        WHERE movie_id IS NOT NULL AND movie_id > 0 AND movie_id <= ' . M3U_ADULT_ID_THRESHOLD . '
+        AND movie_id NOT IN (SELECT movie_id FROM tmdb_meta) LIMIT 20')->fetchAll();
     if (empty($rows)) {
         return 0;
     }
@@ -433,12 +461,50 @@ function m3uImportTmdb(PDO $db): int {
     return $n;
 }
 
+// Populates adult_meta (title + poster) from adult-movies.json. Unlike
+// m3uImportTmdb() this is a local file read, not a network call, so it just
+// re-imports the WHOLE file whenever it changes (~10k rows, well under a
+// second) rather than looking up ids one at a time - simpler, and the file
+// itself is regenerated wholesale on its own schedule (see the playlist
+// generation scripts), not appended to incrementally. A kv flag keyed by the
+// file's mtime skips the reimport when nothing has changed.
+function m3uImportAdultMeta(PDO $db): int {
+    $path = __DIR__ . '/adult-movies.json';
+    if (!is_file($path)) {
+        return 0;
+    }
+    $mtime = (string) filemtime($path);
+    if (m3uKvGet($db, 'adult_meta_mtime', '') === $mtime) {
+        return 0;
+    }
+    $data = json_decode((string) @file_get_contents($path), true);
+    if (!is_array($data)) {
+        return 0;
+    }
+    $ins = $db->prepare('INSERT OR REPLACE INTO adult_meta (movie_id, title, poster, updated) VALUES (?,?,?,?)');
+    $n = 0;
+    $now = time();
+    $db->beginTransaction();
+    foreach ($data as $row) {
+        $id = (int) ($row['stream_id'] ?? $row['num'] ?? 0);
+        if ($id <= 0) {
+            continue;
+        }
+        $ins->execute([$id, (string) ($row['name'] ?? ''), (string) ($row['stream_icon'] ?? ''), $now]);
+        $n++;
+    }
+    $db->commit();
+    m3uKvSet($db, 'adult_meta_mtime', $mtime);
+    return $n;
+}
+
 function m3uRunImport(PDO $db): array {
     return [
         'events' => m3uImportEvents($db),
         'cache' => m3uImportCache($db),
         'geo' => m3uImportGeo($db),
         'tmdb' => m3uImportTmdb($db),
+        'adult' => m3uImportAdultMeta($db),
     ];
 }
 
@@ -608,6 +674,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Content-Type: application/json');
         $ip = trim((string) ($_POST['ip'] ?? ''));
         echo json_encode(['ok' => (bool) m3uUnblockIp($ip)]);
+        exit;
+    } elseif ($action === 'whitelist_ip') {
+        if (!m3uIsLoggedIn()) { http_response_code(403); exit; }
+        m3uCheckCsrf();
+        header('Content-Type: application/json');
+        $ip = trim((string) ($_POST['ip'] ?? ''));
+        $note = trim((string) ($_POST['note'] ?? ''));
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            echo json_encode(['ok' => false, 'error' => 'Invalid IP address.']);
+            exit;
+        }
+        echo json_encode(['ok' => (bool) m3uWhitelistIp($ip, $note)]);
+        exit;
+    } elseif ($action === 'unwhitelist_ip') {
+        if (!m3uIsLoggedIn()) { http_response_code(403); exit; }
+        m3uCheckCsrf();
+        header('Content-Type: application/json');
+        $ip = trim((string) ($_POST['ip'] ?? ''));
+        echo json_encode(['ok' => (bool) m3uUnwhitelistIp($ip)]);
         exit;
     }
 }

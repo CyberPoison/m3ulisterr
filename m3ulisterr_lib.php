@@ -13,6 +13,11 @@ if (defined('M3ULISTERR_LIB_LOADED')) {
 }
 define('M3ULISTERR_LIB_LOADED', true);
 
+// Movie ids above this are adult content (see playAdultVideo() in play.php,
+// which routes on the same threshold: `intval($movieId) > 10000000`). These
+// ids come from adult-movies.json, NOT TMDB - never valid TMDB lookups.
+define('M3U_ADULT_ID_THRESHOLD', 10000000);
+
 // Private data directory. Outside the web root whenever the server lets us
 // create one there, so nothing in it is reachable by URL at all. Otherwise a
 // directory inside the web root that both the root .htaccess and its own
@@ -183,6 +188,13 @@ function m3uCacheDb() {
             media_type TEXT,
             count INTEGER DEFAULT 0,
             PRIMARY KEY (ip, day, media_type)
+        )');
+        // Trusted IPs (testing/development) that are NEVER blocked or rate
+        // limited, regardless of blocked_ips or the daily limits below.
+        $pdo->exec('CREATE TABLE IF NOT EXISTS whitelisted_ips (
+            ip TEXT PRIMARY KEY,
+            note TEXT,
+            created INTEGER
         )');
         $db = $pdo;
     } catch (Throwable $e) {
@@ -367,6 +379,88 @@ function m3uListBlockedIps() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// IP whitelist: trusted IPs (testing/development) that bypass BOTH manual
+// blocks and the daily rate limits entirely - checked first, before either,
+// in play.php's gate. Two sources, merged: this DB table (dashboard-managed,
+// one click from the Sessions table) and the static $ipWhitelist array in
+// config.php (handy for a fixed dev/office IP that should always be trusted
+// even if the DB is ever wiped). Either source is enough to whitelist an IP.
+// ---------------------------------------------------------------------------
+
+// True if $ip is trusted (in the DB whitelist OR in config.php's
+// $ipWhitelist). Fail-open in the sense that a DB error just falls back to
+// the config-only check rather than treating it as "not whitelisted".
+function m3uIsIpWhitelisted($ip) {
+    if ($ip === '') {
+        return false;
+    }
+    global $ipWhitelist;
+    if (is_array($ipWhitelist) && in_array($ip, $ipWhitelist, true)) {
+        return true;
+    }
+    $db = m3uCacheDb();
+    if (!$db) {
+        return false;
+    }
+    try {
+        $st = $db->prepare('SELECT 1 FROM whitelisted_ips WHERE ip = ?');
+        $st->execute([$ip]);
+        return (bool) $st->fetch();
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+// Adds (or updates the note on) a whitelisted IP.
+function m3uWhitelistIp($ip, $note = '') {
+    $ip = trim((string) $ip);
+    if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+        return false;
+    }
+    $db = m3uCacheDb();
+    if (!$db) {
+        return false;
+    }
+    try {
+        $st = $db->prepare('INSERT INTO whitelisted_ips (ip, note, created)
+            VALUES (?, ?, ?)
+            ON CONFLICT(ip) DO UPDATE SET note = excluded.note');
+        return $st->execute([$ip, (string) $note, time()]);
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+// Removes an IP from the DB whitelist. Does NOT affect config.php's static
+// $ipWhitelist - an IP hardcoded there stays trusted until edited out there.
+function m3uUnwhitelistIp($ip) {
+    $db = m3uCacheDb();
+    if (!$db) {
+        return false;
+    }
+    try {
+        return $db->prepare('DELETE FROM whitelisted_ips WHERE ip = ?')->execute([(string) $ip]);
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+// Lists all DB-whitelisted IPs (newest first) for the dashboard. Does not
+// include the config.php-only $ipWhitelist entries (those aren't
+// dashboard-removable, so they're not shown as removable rows).
+function m3uListWhitelistedIps() {
+    $db = m3uCacheDb();
+    if (!$db) {
+        return [];
+    }
+    try {
+        return $db->query('SELECT ip, note, created FROM whitelisted_ips ORDER BY created DESC')->fetchAll();
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
 // Increments today's (UTC) request counter for an IP and returns the new count.
 function m3uIpDailyIncrement($ip) {
     if ($ip === '') {
@@ -486,10 +580,46 @@ function m3uEncodeGdImage($img, $mime, $path = null) {
     }
 }
 
+// Loads the branded notice background (a neon-framed 1280x720 PNG, pre-scaled
+// from the studio-supplied artwork so no runtime resizing is needed) as a
+// fresh truecolor GD image, or null if the asset is missing or GD can't
+// decode it. PNG only - not the original .avif art: AVIF decoding needs
+// libavif support in GD, which is far less commonly compiled in than PNG
+// (the same class of gap that broke JPEG output in production - see
+// m3uPickGdOutputMime() - so this sidesteps it entirely rather than risking
+// the same failure for a decode instead of an encode). Always returns a
+// TRUECOLOR image (imagepalettetotruecolor()'d if the PNG came back
+// palette-based) so imagecolorallocate() afterwards behaves normally.
+function m3uLoadBlockBackground($w, $h) {
+    if (!function_exists('imagecreatefrompng')) {
+        return null;
+    }
+    $path = __DIR__ . '/assets/block_notice_bg.png';
+    if (!is_file($path)) {
+        return null;
+    }
+    $img = @imagecreatefrompng($path);
+    if ($img === false) {
+        return null;
+    }
+    if (!imageistruecolor($img)) {
+        imagepalettetotruecolor($img);
+    }
+    // The shipped asset is already exactly 1280x720; only resample if a
+    // differently-sized file was ever substituted in its place.
+    if (imagesx($img) !== $w || imagesy($img) !== $h) {
+        $resized = imagecreatetruecolor($w, $h);
+        imagecopyresampled($resized, $img, 0, 0, 0, 0, $w, $h, imagesx($img), imagesy($img));
+        imagedestroy($img);
+        $img = $resized;
+    }
+    return $img;
+}
+
 // Renders the "blocked" notice as a GD true-color image resource (caller owns
 // it - imagedestroy() when done), or null if the GD extension isn't available.
-// Shared by the direct image fallback (m3uServeBlockScreen) and the video
-// pipeline (m3uServeBlockVideo), so both always show identical wording.
+// Shared by the direct image fallback (m3uServeBlockScreen) and the MJPEG
+// stream (m3uServeBlockStream), so both always show identical wording.
 function m3uRenderBlockImage($message, $title = 'Access blocked') {
     if (!function_exists('imagecreatetruecolor')) {
         return null;
@@ -501,48 +631,66 @@ function m3uRenderBlockImage($message, $title = 'Access blocked') {
 
     $w = 1280;
     $h = 720;
-    $img = imagecreatetruecolor($w, $h);
-    $bg = imagecolorallocate($img, 17, 18, 22);      // near-black
-    $accent = imagecolorallocate($img, 229, 57, 53); // red
+    $img = m3uLoadBlockBackground($w, $h);
+    if ($img === null) {
+        // No custom background available (missing/unreadable asset, or GD
+        // can't decode PNG at all) - fall back to the original plain canvas.
+        $img = imagecreatetruecolor($w, $h);
+        $bg = imagecolorallocate($img, 17, 18, 22); // near-black
+        imagefilledrectangle($img, 0, 0, $w, $h, $bg);
+        $accent = imagecolorallocate($img, 229, 57, 53); // red
+        // Top accent bar - only drawn on the plain fallback canvas; the
+        // branded background already has its own red/blue neon frame.
+        imagefilledrectangle($img, 0, 0, $w, 8, $accent);
+    } else {
+        $accent = imagecolorallocate($img, 255, 90, 110); // bright red, reads on the dark navy center
+    }
     $fg = imagecolorallocate($img, 240, 240, 245);   // off-white
-    $muted = imagecolorallocate($img, 150, 152, 160);
-    imagefilledrectangle($img, 0, 0, $w, $h, $bg);
-    // Top accent bar.
-    imagefilledrectangle($img, 0, 0, $w, 8, $accent);
+    $muted = imagecolorallocate($img, 190, 192, 200);
 
     // Title (built-in font 5, scaled up by drawing larger via imagestring
     // is limited; keep it readable and centered).
     $titleText = strtoupper($title);
     $tw = imagefontwidth(5) * strlen($titleText);
-    imagestring($img, 5, (int) (($w - $tw) / 2), 250, $titleText, $accent);
+    $titleY = 190;
+    imagestring($img, 5, (int) (($w - $tw) / 2), $titleY, $titleText, $accent);
 
-    // Word-wrap the message across the middle of the screen.
+    $footerY = $h - 60;
+
+    // Word-wrap the message, then center the WHOLE block vertically in the
+    // space between the title and the footer - not just each line
+    // horizontally - so a one-line limit notice and a long custom admin
+    // block reason both land in the middle of the frame instead of the
+    // short message looking stranded near the top.
     $font = 4;
     $charW = imagefontwidth($font);
     $maxChars = (int) (($w - 160) / $charW);
-    $lines = [];
-    foreach (explode("\n", wordwrap($message, $maxChars, "\n", true)) as $ln) {
-        $lines[] = $ln;
-    }
-    $y = 310;
+    $lines = explode("\n", wordwrap($message, $maxChars, "\n", true));
+
+    $lineHeight = imagefontheight($font) + 8;
+    $blockHeight = count($lines) * $lineHeight - 8;
+    $areaTop = $titleY + imagefontheight(5) + 40;
+    $areaBottom = $footerY - 30;
+    $y = $areaTop + max(0, (int) (($areaBottom - $areaTop - $blockHeight) / 2));
+
     foreach ($lines as $ln) {
         $lw = $charW * strlen($ln);
         imagestring($img, $font, (int) (($w - $lw) / 2), $y, $ln, $fg);
-        $y += imagefontheight($font) + 8;
+        $y += $lineHeight;
     }
 
     $footer = 'Contact the administrator if you believe this is a mistake.';
     $fw = imagefontwidth(2) * strlen($footer);
-    imagestring($img, 2, (int) (($w - $fw) / 2), $h - 60, $footer, $muted);
+    imagestring($img, 2, (int) (($w - $fw) / 2), $footerY, $footer, $muted);
 
     return $img;
 }
 
 // Serves a full-screen "blocked" notice to the client as a still IMAGE, then
 // exits. Falls back to a plain-text screen when the GD image extension is
-// unavailable. Used as the last-resort fallback when the video pipeline
-// (m3uServeBlockVideo, below) can't produce a video - e.g. no ffmpeg on the
-// host. Never returns.
+// unavailable. Used as the last-resort fallback when the MJPEG stream
+// (m3uServeBlockStream, below) can't render/encode a frame at all. Never
+// returns.
 function m3uServeBlockScreen($message, $title = 'Access blocked') {
     // Avoid any caching of the notice by players / CDNs.
     if (!headers_sent()) {
@@ -574,217 +722,103 @@ function m3uServeBlockScreen($message, $title = 'Access blocked') {
 }
 
 // ---------------------------------------------------------------------------
-// Block VIDEO: the actual notice most players/viewers see. A still JPEG is
-// technically a valid response, but many IPTV/VOD apps flash it for a split
-// second (or fail to render a bare image at all) since they expect an actual
-// video stream at a play.php-style URL - not enough time for anyone to read
-// why they were blocked. So the notice is instead delivered as a real
-// ~10-minute H.264 MP4 (the wrapped GD notice image, held for the full
-// duration, with a silent audio track for player compatibility), which any
-// video player displays and holds on screen long enough to read.
+// Block STREAM: the actual notice most players/viewers see. A single still
+// JPEG response is technically valid, but many IPTV/VOD apps flash it for a
+// split second (or fail to render a bare image at all) since they expect an
+// actual video stream at a play.php-style URL - not enough time for anyone to
+// read why they were blocked.
 //
-// Generation is cached to disk (keyed by the exact wording, so admins editing
-// the block reason automatically get a freshly rendered video) under the
-// public, persistent videos/ directory - the same directory already used for
-// the how-to video, and mounted as a durable Docker volume so cached notice
-// videos survive redeploys. A file lock prevents duplicate concurrent ffmpeg
-// runs when several requests hit a freshly-blocked IP at once. Falls back to
-// the still-image screen (m3uServeBlockScreen) if ffmpeg/GD is unavailable or
-// encoding fails/times out, so a broken host never leaves the viewer with
-// nothing at all.
+// Rather than pre-encoding and caching an actual video file (the earlier
+// design here - dropped per explicit request: it needed ffmpeg and, however
+// it was keyed, risked storage growth), the notice is delivered as a live
+// MJPEG stream (`multipart/x-mixed-replace`, the same content type IP cameras
+// use): the ONE notice frame is rendered by GD a single time, then that exact
+// same frame's bytes are resent every few seconds for as long as the viewer
+// stays connected, up to a hard cap (M3U_BLOCK_STREAM_SECONDS, 10 minutes).
+// Any ffmpeg-capable/MJPEG-aware player decodes this as a continuous video
+// and holds the message on screen; a browser renders it directly too. This
+// costs no disk I/O and no external process at all - GD rendering + encoding
+// one frame is well under a second - so there is nothing to cache, nothing to
+// clean up, and no storage growth no matter how many IPs get blocked or how
+// often an admin changes a reason or a limit.
+//
+// Trade-off, deliberately accepted: unlike a pre-rendered static file (which
+// Apache could serve without invoking PHP at all), this ties up one PHP
+// worker for the life of each open connection (up to 10 minutes). That's
+// judged acceptable here because it only affects the small population of
+// already-blocked/over-limit requests, never normal playback.
 // ---------------------------------------------------------------------------
 
-define('M3U_BLOCK_VIDEO_SECONDS', 600); // 10 minutes
-define('M3U_BLOCK_VIDEO_VERSION', 'v1'); // bump to invalidate all cached videos
+define('M3U_BLOCK_STREAM_SECONDS', 600); // 10 minutes, hard cap
+define('M3U_BLOCK_STREAM_FRAME_INTERVAL', 3); // seconds between resent frames
 
-// Locates the ffmpeg binary. `command -v` alone can miss it under PHP-FPM,
-// whose worker PATH is often a bare minimal default (no /opt/homebrew/bin,
-// /usr/local/bin, etc.) even though the same binary works fine from a shell -
-// so this also tries the common absolute install locations, the same
-// resilience pattern as m3uFindPhpCli() in dashboard.php.
-function m3uFindFfmpeg() {
-    static $cached = null;
-    if ($cached !== null) {
-        return $cached;
-    }
-    $c = trim((string) @shell_exec('command -v ffmpeg 2>/dev/null'));
-    if ($c !== '' && @is_executable($c)) {
-        return $cached = $c;
-    }
-    foreach (['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg'] as $p) {
-        if (@is_executable($p)) {
-            return $cached = $p;
-        }
-    }
-    return $cached = '';
-}
-
-function m3uBlockVideoDir() {
-    $dir = __DIR__ . '/videos/blocked';
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0755, true);
-    }
-    return is_dir($dir) ? $dir : null;
-}
-
-// Removes the oldest cached notice videos once the cache grows past $keep
-// distinct messages, so an admin who cycles through many custom block reasons
-// over time doesn't accumulate mp4s forever. Cheap and rarely triggered.
-function m3uPruneBlockVideos($dir, $keep = 50) {
-    $files = glob($dir . '/*.mp4');
-    if (!is_array($files) || count($files) <= $keep) {
-        return;
-    }
-    usort($files, function ($a, $b) { return filemtime($a) <=> filemtime($b); });
-    foreach (array_slice($files, 0, count($files) - $keep) as $old) {
-        @unlink($old);
-    }
-}
-
-// Runs ffmpeg with a hard wall-clock deadline (macOS/some minimal images lack
-// the `timeout` binary, so this is done in PHP with proc_open). Returns true
-// on a clean exit(0), false otherwise (including on timeout, where the process
-// is force-killed so it never lingers).
-function m3uRunWithDeadline(array $cmd, $deadlineSeconds) {
-    $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-    $proc = @proc_open($cmd, $descriptors, $pipes);
-    if (!is_resource($proc)) {
-        return false;
-    }
-    fclose($pipes[0]);
-    stream_set_blocking($pipes[1], false);
-    stream_set_blocking($pipes[2], false);
-
-    $deadline = microtime(true) + $deadlineSeconds;
-    do {
-        $status = proc_get_status($proc);
-        if (!$status['running']) {
-            break;
-        }
-        usleep(100000); // 100ms
-    } while (microtime(true) < $deadline);
-
-    $status = proc_get_status($proc);
-    $ok = false;
-    if ($status['running']) {
-        // Timed out - SIGKILL so a stuck ffmpeg never lingers (proc_close
-        // alone can block for minutes on a wedged child, as seen with the
-        // parallel ffprobe duration checks elsewhere in this codebase).
-        @proc_terminate($proc, 9);
-        usleep(200000);
-    } else {
-        $ok = ($status['exitcode'] === 0);
-    }
-    foreach ($pipes as $p) {
-        if (is_resource($p)) {
-            @fclose($p);
-        }
-    }
-    @proc_close($proc);
-    return $ok;
-}
-
-// Serves the ~10-minute notice video for $message/$title, generating and
-// caching it on first use, then exits (redirects to the cached static file so
-// Apache - not PHP - handles Range/seek requests, the same pattern already
-// used for the how-to video). Falls back to the still-image screen if a video
-// can't be produced. Never returns.
-function m3uServeBlockVideo($message, $title = 'Access blocked') {
+// Serves the notice as a live MJPEG stream for up to $maxSeconds (default
+// M3U_BLOCK_STREAM_SECONDS, capped to it regardless of what's passed in).
+// Falls back to a single still-image response (m3uServeBlockScreen) if GD
+// can't render/encode at all. Never returns.
+function m3uServeBlockStream($message, $title = 'Access blocked', $maxSeconds = null) {
     $message = trim((string) $message);
     if ($message === '') {
         $message = 'Your IP has been blocked due to too many movie / TV show requests.';
     }
 
-    $dir = m3uBlockVideoDir();
-    if ($dir === null) {
+    $mime = m3uPickGdOutputMime();
+    $img = ($mime !== null) ? m3uRenderBlockImage($message, $title) : null;
+    if ($img === null) {
         m3uServeBlockScreen($message, $title); // exits
     }
 
-    $hash = substr(sha1(M3U_BLOCK_VIDEO_VERSION . '|' . $title . '|' . $message), 0, 24);
-    $path = $dir . '/' . $hash . '.mp4';
-
-    if (is_file($path) && filesize($path) > 0) {
-        m3uRedirectToBlockVideo($path); // exits
+    // Encode the frame ONCE up front; the loop below just resends these same
+    // bytes, so there is no repeated GD work per frame.
+    ob_start();
+    m3uEncodeGdImage($img, $mime, null);
+    $frame = ob_get_clean();
+    imagedestroy($img);
+    if (!is_string($frame) || $frame === '') {
+        m3uServeBlockScreen($message, $title); // exits
     }
 
-    // Not cached yet - generate it. A lock prevents a stampede of concurrent
-    // ffmpeg runs when several requests hit a freshly-blocked IP at once.
-    $lockPath = $path . '.lock';
-    $lockFp = @fopen($lockPath, 'c');
-    if ($lockFp && flock($lockFp, LOCK_EX)) {
-        // Another request may have finished generating it while we waited.
-        if (is_file($path) && filesize($path) > 0) {
-            flock($lockFp, LOCK_UN);
-            fclose($lockFp);
-            m3uRedirectToBlockVideo($path); // exits
+    $seconds = (int) ($maxSeconds ?? M3U_BLOCK_STREAM_SECONDS);
+    if ($seconds <= 0 || $seconds > M3U_BLOCK_STREAM_SECONDS) {
+        $seconds = M3U_BLOCK_STREAM_SECONDS;
+    }
+
+    // This request legitimately runs for up to $seconds - make sure nothing
+    // (PHP's own execution-time limit, output buffering, a proxy's response
+    // buffering) cuts it short or delays delivery of each frame.
+    @set_time_limit($seconds + 20);
+    ignore_user_abort(false);
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
+    @ini_set('zlib.output_compression', '0');
+    if (function_exists('apache_setenv')) {
+        @apache_setenv('no-gzip', '1');
+    }
+
+    if (headers_sent()) {
+        exit();
+    }
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+    header('Pragma: no-cache');
+    header('X-Accel-Buffering: no'); // no-op unless behind an nginx proxy, harmless otherwise
+    $boundary = 'm3ublockframe';
+    header('Content-Type: multipart/x-mixed-replace; boundary=' . $boundary);
+
+    $part = "--{$boundary}\r\nContent-Type: {$mime}\r\nContent-Length: " . strlen($frame) . "\r\n\r\n{$frame}\r\n";
+    $deadline = microtime(true) + $seconds;
+    do {
+        if (connection_aborted()) {
+            break;
         }
+        echo $part;
+        @flush();
+        usleep(M3U_BLOCK_STREAM_FRAME_INTERVAL * 1000000);
+    } while (microtime(true) < $deadline);
 
-        $ffmpegPath = m3uFindFfmpeg();
-        $imgMime = m3uPickGdOutputMime();
-        $img = ($ffmpegPath !== '' && $imgMime !== null) ? m3uRenderBlockImage($message, $title) : null;
-
-        if ($img !== null) {
-            // ffmpeg reads either format fine as a looped image input.
-            $imgExt = ($imgMime === 'image/png') ? 'png' : 'jpg';
-            $imgPath = $dir . '/' . $hash . '.src.' . $imgExt;
-            m3uEncodeGdImage($img, $imgMime, $imgPath);
-            imagedestroy($img);
-
-            $tmpPath = $path . '.tmp-' . getmypid() . '.mp4';
-            $cmd = [
-                $ffmpegPath, '-y',
-                // The framerate MUST be set on the image INPUT (-framerate),
-                // not as an output-side -r filter: the latter forces ffmpeg
-                // through a frame-duplication/rate-conversion path that is
-                // ~4x slower for a long loop of one still image (measured
-                // ~19s vs ~6s for a 600s encode) for identical output.
-                '-framerate', '5', '-loop', '1', '-i', $imgPath,
-                '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-                '-t', (string) M3U_BLOCK_VIDEO_SECONDS,
-                // No scale/pad filter needed - m3uRenderBlockImage() always
-                // produces an exact 1280x720 source image.
-                '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'stillimage', '-crf', '30',
-                '-pix_fmt', 'yuv420p', '-g', '50',
-                '-c:a', 'aac', '-b:a', '48k',
-                '-movflags', '+faststart',
-                $tmpPath,
-            ];
-            // Encoding a static image is cheap (a few seconds), but never let
-            // a wedged ffmpeg hold the viewer's request open indefinitely -
-            // fall back to the still image instead.
-            $ok = m3uRunWithDeadline($cmd, 25);
-            @unlink($imgPath);
-
-            if ($ok && is_file($tmpPath) && filesize($tmpPath) > 0) {
-                @rename($tmpPath, $path);
-                m3uPruneBlockVideos($dir);
-                flock($lockFp, LOCK_UN);
-                fclose($lockFp);
-                m3uRedirectToBlockVideo($path); // exits
-            }
-            @unlink($tmpPath);
-        }
-
-        flock($lockFp, LOCK_UN);
-        fclose($lockFp);
+    if (!connection_aborted()) {
+        echo "--{$boundary}--\r\n";
     }
-
-    // ffmpeg missing, GD missing, or encoding failed/timed out - never leave
-    // the viewer with nothing.
-    m3uServeBlockScreen($message, $title); // exits
-}
-
-// Redirects to a cached notice video so Apache serves the static file
-// directly (native Range/seek support, no PHP in the streaming path). Never
-// returns.
-function m3uRedirectToBlockVideo($path) {
-    if (!headers_sent()) {
-        header('Cache-Control: no-store, no-cache, must-revalidate');
-        header('Pragma: no-cache');
-    }
-    $rel = 'videos/blocked/' . basename($path);
-    $url = function_exists('locateBaseURL') ? (locateBaseURL() . $rel) : ('/' . $rel);
-    header('Location: ' . $url, true, 302);
     exit();
 }
 

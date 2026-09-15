@@ -78,6 +78,7 @@ function m3uSessions(PDO $db, int $limit = 500): array {
             seg.furthest, seg.avg_deliver, seg.max_deliver, seg.seg_count,
             g.country, g.country_code, g.city, g.zip, g.region, g.lat, g.lon, g.isp,
             tm.title, tm.year, tm.poster, tm.overview,
+            am.title AS adult_title, am.poster AS adult_poster,
             ua.ua
         FROM rs
         LEFT JOIN enrich en ON en.media = rs.media
@@ -85,6 +86,7 @@ function m3uSessions(PDO $db, int $limit = 500): array {
         LEFT JOIN seg ON seg.media = rs.media AND seg.ip = rs.ip
         LEFT JOIN geo g ON g.ip = rs.ip
         LEFT JOIN tmdb_meta tm ON tm.movie_id = COALESCE(NULLIF(rs.movie_id,0), en.movie_id)
+        LEFT JOIN adult_meta am ON am.movie_id = COALESCE(NULLIF(rs.movie_id,0), en.movie_id)
         LEFT JOIN (SELECT ip, media, MAX(ts) t, ua FROM events WHERE ua != '' GROUP BY ip, media) ua
                ON ua.ip = rs.ip AND ua.media = rs.media
         ORDER BY rs.ts DESC
@@ -100,9 +102,28 @@ function m3uSessions(PDO $db, int $limit = 500): array {
         $r['flag'] = m3uFlag((string) ($r['country_code'] ?? ''));
         $r['device'] = m3uDevice((string) ($r['ua'] ?? ''));
         $r['subtitles_list'] = $r['subtitles'] ? (json_decode($r['subtitles'], true) ?: []) : [];
-        $r['poster_url'] = !empty($r['poster']) ? ('https://image.tmdb.org/t/p/w154' . $r['poster']) : '';
+
+        // Adult content (movie_id above M3U_ADULT_ID_THRESHOLD) is never a
+        // real TMDB id, so it has its own metadata source (adult_meta, built
+        // from adult-movies.json - see m3uImportAdultMeta()) with its own
+        // already-absolute poster URL, not a TMDB relative poster_path.
+        $r['is_adult'] = ((int) ($r['movie_id'] ?? 0)) > M3U_ADULT_ID_THRESHOLD;
+        if ($r['is_adult']) {
+            $r['title'] = $r['adult_title'] ?: $r['title'];
+            $r['poster_url'] = (string) ($r['adult_poster'] ?? '');
+        } else {
+            $r['poster_url'] = !empty($r['poster']) ? ('https://image.tmdb.org/t/p/w154' . $r['poster']) : '';
+        }
+        unset($r['adult_title'], $r['adult_poster']);
+
         $r['is_series'] = ($r['media_type'] === 'series' || !empty($r['series_code']));
-        $r['kind_label'] = $r['is_series'] ? 'TV' : 'Movie';
+        $r['kind_label'] = $r['is_adult'] ? 'Adult' : ($r['is_series'] ? 'TV' : 'Movie');
+        // "tmdb:<id>" for real movies/TV (both use TMDB ids), "adult:<id>"
+        // for adult content (its id only means anything against
+        // adult-movies.json, never against TMDB).
+        $r['id_label'] = !empty($r['movie_id'])
+            ? (($r['is_adult'] ? 'adult:' : 'tmdb:') . $r['movie_id'])
+            : '';
         unset($r['subtitles']);
     }
     unset($r);
@@ -212,6 +233,7 @@ function m3uApi(PDO $db, string $q): array {
                     'resolvedCache' => $resolvedCache,
                     'prewarmedCount' => $prewarmedCount,
                     'blockedCount' => (int) $db->query("SELECT COUNT(*) c FROM blocked_ips")->fetch()['c'],
+                    'whitelistedCount' => (int) $db->query("SELECT COUNT(*) c FROM whitelisted_ips")->fetch()['c'],
                     'avgResolveMs' => $avgResolve ? round((float) $avgResolve) : null,
                     'avgDeliverMs' => $avgDeliver ? round((float) $avgDeliver) : null,
                 ],
@@ -232,12 +254,18 @@ function m3uApi(PDO $db, string $q): array {
             ];
 
         case 'sessions':
-            // Annotate each row with its IP's block state + today's request count
-            // so the Sessions table can show a Block/Unblock control per IP.
+            // Annotate each row with its IP's block/whitelist state + today's
+            // request count so the Sessions table can show Block/Unblock and
+            // Whitelist/Un-whitelist controls per IP.
             $blockedMap = [];
             foreach (m3uListBlockedIps() as $b) {
                 $blockedMap[$b['ip']] = $b;
             }
+            $whitelistedMap = [];
+            foreach (m3uListWhitelistedIps() as $w) {
+                $whitelistedMap[$w['ip']] = true;
+            }
+            $configWhitelist = isset($GLOBALS['ipWhitelist']) && is_array($GLOBALS['ipWhitelist']) ? $GLOBALS['ipWhitelist'] : [];
             $today = gmdate('Y-m-d');
             // Per-type daily counts (movie vs series) keyed by IP.
             $usageMap = [];
@@ -253,6 +281,8 @@ function m3uApi(PDO $db, string $q): array {
                 $ip = (string) ($s['ip'] ?? '');
                 $s['blocked'] = isset($blockedMap[$ip]);
                 $s['block_reason'] = $s['blocked'] ? (string) ($blockedMap[$ip]['reason'] ?? '') : '';
+                $s['whitelisted'] = isset($whitelistedMap[$ip]) || in_array($ip, $configWhitelist, true);
+                $s['whitelisted_static'] = in_array($ip, $configWhitelist, true); // config.php-only, not un-whitelistable from the dashboard
                 $u = $usageMap[$ip] ?? ['movie' => 0, 'series' => 0];
                 $s['today_movies'] = $u['movie'];
                 $s['today_episodes'] = $u['series'];
@@ -263,6 +293,9 @@ function m3uApi(PDO $db, string $q): array {
 
         case 'blocked':
             return ['ok' => true, 'blocked' => m3uListBlockedIps()];
+
+        case 'whitelisted':
+            return ['ok' => true, 'whitelisted' => m3uListWhitelistedIps()];
 
         case 'config':
             return ['ok' => true, 'fields' => m3uEditableConfig(), 'values' => m3uReadConfigValues()];
@@ -325,6 +358,8 @@ function m3uTopMovies(array $sessions): array {
                 'overview' => $s['overview'] ?? '',
                 'kind_label' => $s['kind_label'] ?? 'Movie',
                 'is_series' => !empty($s['is_series']),
+                'is_adult' => !empty($s['is_adult']),
+                'id_label' => $s['id_label'] ?? '',
                 'plays' => 0, 'debrid' => [], 'langs' => [],
             ];
         }

@@ -157,6 +157,18 @@ $dailyMovieLimit   = 0; // 0 = unlimited movies per IP per day.   Example: 100
 $dailyEpisodeLimit = 0; // 0 = unlimited TV episodes per IP/day.  Example: 200
 $dailyRequestLimit = 0; // 0 = unlimited combined total. Example: 250 (movies + episodes)
 
+// ── IP whitelist (testing / development) ─────────────────────────────────
+// IPs listed here are NEVER blocked and NEVER rate-limited (manual blocks and
+// the daily movie/episode/total limits above all skip them entirely) -
+// handy for your own office/VPN/dev IP so you can hammer the server while
+// testing without tripping your own limits. This list is static (edit this
+// file directly, not through the dashboard); IPs can ALSO be whitelisted
+// dynamically from the dashboard Sessions table, which is easier for a
+// one-off - both sources are checked, either is enough.
+$ipWhitelist = [
+    // '203.0.113.7', // example: a fixed dev-office IP
+];
+
 // Change the run order here. This can be Used to speed up the process of finding a link.
 // Cut the entire line and paste it above or below another. The list is ran
 // from top to bottom. You can also disable a website by commenting it out with //

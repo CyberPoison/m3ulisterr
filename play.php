@@ -12,11 +12,20 @@ require_once 'debrid.php';
 
 // Dashboard "preview" of the block screen: lets an admin see exactly what a
 // blocked / rate-limited viewer is served. No auth needed - it only renders a
-// notice video (or the still-image fallback) and reveals nothing sensitive.
-// Add &raw=1 to preview the still-image fallback directly instead of the video.
+// notice stream (or the still-image fallback) and reveals nothing sensitive.
+// Add &raw=1 to preview the still-image fallback directly instead of the
+// stream, or &sec=N (2-600) to preview a short stream instead of waiting the
+// full 10 minutes.
 if (isset($_GET['previewBlock'])) {
     $pv = strtolower((string) $_GET['previewBlock']);
-    $serve = (isset($_GET['raw']) && $_GET['raw'] !== '0') ? 'm3uServeBlockScreen' : 'm3uServeBlockVideo';
+    $rawPreview = isset($_GET['raw']) && $_GET['raw'] !== '0';
+    $previewSec = isset($_GET['sec']) ? max(2, min(600, (int) $_GET['sec'])) : null;
+    $serve = function ($message, $title) use ($rawPreview, $previewSec) {
+        if ($rawPreview) {
+            m3uServeBlockScreen($message, $title); // exits
+        }
+        m3uServeBlockStream($message, $title, $previewSec); // exits
+    };
     if ($pv === 'movie' || $pv === 'movies') {
         $lim = isset($dailyMovieLimit) ? (int) $dailyMovieLimit : 0;
         $serve('Blocked: you reached the maximum limit of requesting movies per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
@@ -29,7 +38,7 @@ if (isset($_GET['previewBlock'])) {
         $lim = isset($dailyRequestLimit) ? (int) $dailyRequestLimit : 0;
         $serve('Blocked: you reached the maximum limit of requesting movies / TV shows per day' . ($lim > 0 ? ' (' . $lim . ').' : '.'), 'Daily limit reached');
     }
-    $serve('Your IP has been blocked due to too many movie / TV show requests.');
+    $serve('Your IP has been blocked due to too many movie / TV show requests.', 'Access blocked');
 }
 accessLog();
 
@@ -121,18 +130,18 @@ $deleteRDFiles = [];
 
 $userAgent = $_SERVER['HTTP_USER_AGENT'];
 
-// ── IP access control (manual block + per-IP daily rate limit) ───────────
+// ── IP access control (whitelist + manual block + per-IP daily rate limit) ─
 // Runs before any resolving so a blocked / over-limit viewer never triggers a
-// debrid or AIOStreams round-trip. Both checks are fail-open (a DB hiccup lets
+// debrid or AIOStreams round-trip. All checks are fail-open (a DB hiccup lets
 // playback through rather than locking everyone out). See m3ulisterr_lib.php.
 $clientIp = m3uClientIp();
-if ($clientIp !== '') {
+if ($clientIp !== '' && !m3uIsIpWhitelisted($clientIp)) {
     // 1) Manual/admin block (from the dashboard Sessions menu) - permanent
     //    until an admin unblocks the IP.
     list($ipBlocked, $ipBlockReason) = m3uIpBlockStatus($clientIp);
     if ($ipBlocked) {
-        m3uServeBlockVideo($ipBlockReason !== '' ? $ipBlockReason
-            : 'Your IP has been blocked due to too many movie / TV show requests.');
+        m3uServeBlockStream($ipBlockReason !== '' ? $ipBlockReason
+            : 'Your IP has been blocked due to too many movie / TV show requests.', 'Access blocked');
     }
 
     // 2) Per-IP daily request limits (auto-reset each UTC day). Separate caps
@@ -148,12 +157,12 @@ if ($clientIp !== '') {
         $usage = m3uIpUsageToday($clientIp);
         $typeLim = ($mediaKind === 'series') ? $episodeLim : $movieLim;
         if ($typeLim > 0 && $typeCount > $typeLim) {
-            m3uServeBlockVideo('Blocked: you reached the maximum limit of requesting '
+            m3uServeBlockStream('Blocked: you reached the maximum limit of requesting '
                 . ($mediaKind === 'series' ? 'TV shows' : 'movies') . ' per day ('
                 . $typeLim . ').', 'Daily limit reached');
         }
         if ($totalLim > 0 && $usage['total'] > $totalLim) {
-            m3uServeBlockVideo('Blocked: you reached the maximum limit of requesting movies / TV shows per day ('
+            m3uServeBlockStream('Blocked: you reached the maximum limit of requesting movies / TV shows per day ('
                 . $totalLim . ').', 'Daily limit reached');
         }
     }

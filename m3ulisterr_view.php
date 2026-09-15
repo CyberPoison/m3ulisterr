@@ -45,6 +45,24 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);
 .btn:hover{filter:brightness(1.08)}
 .btn.sm{width:auto;padding:8px 14px;margin:0;font-size:13px}
 .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--txt)}
+/* Icon buttons: block/unblock/reveal - a colored pill or circular icon-only
+   button that reads at a glance instead of a plain text <button>. */
+.iconbtn{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:20px;
+  font-size:12px;font-weight:700;letter-spacing:.2px;cursor:pointer;border:1px solid var(--line);
+  background:var(--card2);color:var(--txt);transition:filter .15s,background .15s;white-space:nowrap}
+.iconbtn svg{width:14px;height:14px;flex:0 0 auto;display:block}
+.iconbtn:hover{filter:brightness(1.2)}
+.iconbtn:disabled{opacity:.45;cursor:default;filter:none}
+.iconbtn.block{background:rgba(255,92,122,.14);border-color:rgba(255,92,122,.45);color:#ffb3c2}
+.iconbtn.block:hover{background:rgba(255,92,122,.24)}
+.iconbtn.unblock{background:rgba(55,211,155,.14);border-color:rgba(55,211,155,.45);color:#9ff0cf}
+.iconbtn.unblock:hover{background:rgba(55,211,155,.24)}
+.iconbtn.whitelist{background:rgba(91,141,255,.14);border-color:rgba(91,141,255,.45);color:#bcd0ff}
+.iconbtn.whitelist:hover{background:rgba(91,141,255,.24)}
+.iconbtn.unwhitelist{background:var(--card2);border-color:var(--line);color:var(--dim)}
+.iconbtn.unwhitelist:hover{filter:brightness(1.3)}
+.iconbtn.icon-only{padding:0;width:30px;height:30px;border-radius:50%;justify-content:center}
+.iconbtn.icon-only svg{width:16px;height:16px}
 .err{background:rgba(255,92,122,.12);border:1px solid rgba(255,92,122,.4);color:#ffb3c2;
   padding:10px 13px;border-radius:10px;font-size:13px;margin-top:14px}
 .ok{background:rgba(55,211,155,.12);border:1px solid rgba(55,211,155,.4);color:#9ff0cf;
@@ -95,6 +113,7 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);
 .chip.pm{background:rgba(255,184,77,.16);border-color:rgba(255,184,77,.4);color:#ffd9a3}
 .chip.tv{background:rgba(160,107,255,.18);border-color:rgba(160,107,255,.45);color:#d3befd}
 .chip.mv{background:rgba(91,141,255,.18);border-color:rgba(91,141,255,.45);color:#bcd0ff}
+.chip.adult{background:rgba(255,184,77,.18);border-color:rgba(255,184,77,.45);color:#ffd9a3}
 .pctbar{width:80px;background:var(--bg2);border-radius:5px;height:8px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:6px}
 .pctbar i{display:block;height:100%;background:linear-gradient(90deg,var(--good),var(--accent))}
 .tablewrap{overflow-x:auto;max-height:70vh;overflow-y:auto}
@@ -228,6 +247,11 @@ endif;
         <div id="blockedMsg"></div>
         <div class="tablewrap"><table class="tabtable" id="blockedTable"></table></div>
       </div>
+      <div class="panel" id="whitelistPanel" hidden>
+        <h3>Whitelisted IPs <span id="whitelistCount"></span> <span class="muted" style="font-weight:400;font-size:12px">never blocked or rate-limited</span></h3>
+        <div id="whitelistMsg"></div>
+        <div class="tablewrap"><table class="tabtable" id="whitelistTable"></table></div>
+      </div>
       <div class="panel">
         <h3>Playback sessions <span id="sessCount"></span></h3>
         <div id="sessMsg"></div>
@@ -284,6 +308,17 @@ endif;
 const CSRF = <?= json_encode($csrf) ?>;
 const $ = s => document.querySelector(s);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Small inline SVG icons (currentColor, so they pick up the button's own
+// color) - kept as plain markup strings, no icon library, so they respect
+// the strict CSP without another script-src exception.
+const ICONS = {
+  lock:'<svg viewBox="0 0 16 16" fill="none"><rect x="3" y="7.2" width="10" height="6.8" rx="1.6" fill="currentColor"/><path d="M5.2 7.2V5.3a2.8 2.8 0 0 1 5.6 0v1.9" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>',
+  unlock:'<svg viewBox="0 0 16 16" fill="none"><rect x="3" y="7.2" width="10" height="6.8" rx="1.6" fill="currentColor"/><path d="M5.2 7.2V5.3a2.8 2.8 0 0 1 5.2-1.5" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>',
+  eye:'<svg viewBox="0 0 16 16" fill="none"><path d="M1 8s2.6-4.6 7-4.6S15 8 15 8s-2.6 4.6-7 4.6S1 8 1 8Z" stroke="currentColor" stroke-width="1.3" fill="none"/><circle cx="8" cy="8" r="2.1" fill="currentColor"/></svg>',
+  eyeOff:'<svg viewBox="0 0 16 16" fill="none"><path d="M1.3 8s2.6-4.6 7-4.6c1.4 0 2.6.4 3.7 1.1M14.7 8s-2.6 4.6-7 4.6c-1.4 0-2.6-.4-3.7-1.1" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/><path d="M2 2.3l12 11.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  shield:'<svg viewBox="0 0 16 16" fill="none"><path d="M8 1.6l4.6 1.8v3.7c0 3.2-2 5.4-4.6 6.4-2.6-1-4.6-3.2-4.6-6.4V3.4L8 1.6Z" fill="currentColor" opacity=".18" stroke="currentColor" stroke-width="1.3"/><path d="M5.6 8l1.6 1.6 3-3.4" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  shieldOff:'<svg viewBox="0 0 16 16" fill="none"><path d="M8 1.6l4.6 1.8v3.7c0 3.2-2 5.4-4.6 6.4-2.6-1-4.6-3.2-4.6-6.4V3.4L8 1.6Z" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M2.3 2l11.4 12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+};
 async function api(q){ const r = await fetch('?action=api&q='+encodeURIComponent(q)); return r.json(); }
 async function post(action, data){
   const body = new URLSearchParams(); body.set('csrf', CSRF);
@@ -320,7 +355,8 @@ async function loadOverview(){
     ['Countries',s.countries],['Avg resolve',s.avgResolveMs!=null?s.avgResolveMs+' ms':'—'],
     ['Avg segment',s.avgDeliverMs!=null?s.avgDeliverMs+' ms':'—'],
     ['Durable cache',s.resolvedCache],['Prewarmed',s.prewarmedCount!=null?s.prewarmedCount:'—'],
-    ['Blocked IPs',s.blockedCount!=null?s.blockedCount:'—']];
+    ['Blocked IPs',s.blockedCount!=null?s.blockedCount:'—'],
+    ['Whitelisted IPs',s.whitelistedCount!=null?s.whitelistedCount:'—']];
   $('#statCards').innerHTML=cards.map(c=>`<div class="stat"><div class="n">${esc(c[1])}</div><div class="l">${esc(c[0])}</div></div>`).join('');
   // cache.json health banner on the overview when it's missing/empty.
   if(d.cacheJson && (!d.cacheJson.exists || d.cacheJson.count===0)) renderCacheBanner(d.cacheJson,'ovBanner');
@@ -339,16 +375,21 @@ async function loadOverview(){
 function renderMovies(movies){
   const g=$('#movieGrid');
   if(!movies||!movies.length){g.innerHTML='<div class="muted">No titles yet.</div>';return;}
-  g.innerHTML=movies.map(m=>`<div class="mcard">
+  g.innerHTML=movies.map(m=>{
+    const kindClass=m.is_adult?'adult':(m.is_series?'tv':'mv');
+    return `<div class="mcard">
     <div class="pl">${m.plays}▶</div>
     ${m.poster_url?`<img src="${esc(m.poster_url)}" alt="" loading="lazy">`:'<div style="aspect-ratio:2/3;background:var(--bg2)"></div>'}
-    <div class="mi"><div class="t" title="${esc(m.title)}"><span class="chip ${m.is_series?'tv':'mv'}">${esc(m.kind_label||'Movie')}</span> ${esc(m.title)}</div>
-    <div class="my">${esc(m.year||'')} ${m.debrid.map(x=>`<span class="chip ${x.toLowerCase()==='ad'?'ad':x.toLowerCase()==='pm'?'pm':''}">${esc(x)}</span>`).join('')}</div></div>
-  </div>`).join('');
+    <div class="mi"><div class="t" title="${esc(m.title)}"><span class="chip ${kindClass}">${esc(m.kind_label||'Movie')}</span> ${esc(m.title)}</div>
+    <div class="my">${esc(m.year||'')} ${m.debrid.map(x=>`<span class="chip ${x.toLowerCase()==='ad'?'ad':x.toLowerCase()==='pm'?'pm':''}">${esc(x)}</span>`).join('')}</div>
+    ${m.id_label?`<div class="muted mono" style="font-size:11px;margin-top:3px">${esc(m.id_label)}</div>`:''}</div>
+  </div>`;
+  }).join('');
 }
 
 async function loadSessions(){
   await loadBlocked();
+  await loadWhitelisted();
   const d=await api('sessions'); if(!d.ok)return;
   $('#sessCount').textContent=d.sessions.length+' rows';
   const head=`<thead><tr><th>Title</th><th>Type</th><th>Account</th><th>Lang</th><th>Release</th><th>Debrid</th>
@@ -359,9 +400,24 @@ async function loadSessions(){
     const subs=(s.subtitles_list||[]).map(x=>`<span class="chip">${esc(x.lang||x.name||'sub')}</span>`).join('')||'<span class="muted">—</span>';
     const poster=s.poster_url?`<img class="poster" src="${esc(s.poster_url)}" alt="" loading="lazy">`:'<div class="poster"></div>';
     const ep=s.series_code?`<br><span class="muted">${esc(s.series_code)}</span>`:'';
-    const kind=`<span class="chip ${s.is_series?'tv':'mv'}">${esc(s.kind_label||'Movie')}</span>`;
+    const kindClass=s.is_adult?'adult':(s.is_series?'tv':'mv');
+    const kind=`<span class="chip ${kindClass}">${esc(s.kind_label||'Movie')}</span>`;
+    const idLabel=s.id_label?`<br><span class="muted mono" style="font-size:11px">${esc(s.id_label)}</span>`:'';
+    let actions='';
+    if(s.ip){
+      actions+=s.blocked
+        ?`<button type="button" class="iconbtn unblock unblockBtn" data-ip="${esc(s.ip)}" title="Unblock this IP">${ICONS.unlock} Unblock</button>`
+        :`<button type="button" class="iconbtn block blockBtn" data-ip="${esc(s.ip)}" title="Block this IP">${ICONS.lock} Block</button>`;
+      if(s.whitelisted_static){
+        actions+=`<span class="chip" title="Whitelisted in config.php">${ICONS.shield} config</span>`;
+      } else {
+        actions+=s.whitelisted
+          ?`<button type="button" class="iconbtn unwhitelist unwhitelistBtn" data-ip="${esc(s.ip)}" title="Remove from whitelist">${ICONS.shieldOff} Un-whitelist</button>`
+          :`<button type="button" class="iconbtn whitelist whitelistBtn" data-ip="${esc(s.ip)}" title="Whitelist this IP (never blocked/rate-limited)">${ICONS.shield} Whitelist</button>`;
+      }
+    }
     return `<tr>
-      <td><div class="movie-cell">${poster}<div><div class="mt">${esc(s.title||('#'+s.movie_id))}</div><div class="my">${esc(s.year||'')} · ${esc(s.resolution||'?')}p ${esc(s.codec||'')}</div></div></div></td>
+      <td><div class="movie-cell">${poster}<div><div class="mt">${esc(s.title||('#'+s.movie_id))}</div><div class="my">${esc(s.year||'')} · ${esc(s.resolution||'?')}p ${esc(s.codec||'')}</div>${idLabel}</div></div></td>
       <td>${kind}${ep}</td>
       <td>${esc(s.username||'')}<br><span class="muted mono">${esc(s.password||'')}</span></td>
       <td>${esc(s.lang||'')}${s.audio_lang?`<br><span class="muted">${esc(s.audio_lang)}</span>`:''}</td>
@@ -374,16 +430,15 @@ async function loadSessions(){
       <td style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(s.isp||'')}">${esc(s.isp||'—')}</td>
       <td>${esc(s.device||'')}</td>
       <td class="mono" style="max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(s.ua||'')}">${esc(s.ua||'—')}</td>
-      <td class="mono">${esc(s.ip||'')}${s.blocked?'<br><span class="chip" style="background:#e53935;color:#fff">blocked</span>':''}</td>
+      <td class="mono">${esc(s.ip||'')}${s.blocked?'<br><span class="chip" style="background:#e53935;color:#fff">blocked</span>':''}${s.whitelisted?'<br><span class="chip" style="background:#5b8dff;color:#fff">whitelisted</span>':''}</td>
       <td class="mono" title="Movies / TV episodes requested today by this IP">🎬${esc(s.today_movies||0)} 📺${esc(s.today_episodes||0)}</td>
       <td>${s.cache_hit==1?'<span class="chip">cache</span>':(s.resolve_ms!=null?esc(Math.round(s.resolve_ms))+' ms':'—')}</td>
-      <td>${s.ip?(s.blocked
-        ?`<button type="button" class="unblockBtn" data-ip="${esc(s.ip)}">Unblock</button>`
-        :`<button type="button" class="blockBtn" data-ip="${esc(s.ip)}">Block</button>`):''}</td>
+      <td style="white-space:nowrap;display:flex;flex-direction:column;gap:6px;align-items:flex-start">${actions}</td>
     </tr>`;
   }).join('');
   $('#sessTable').innerHTML=head+'<tbody>'+rows+'</tbody>';
   wireBlockButtons('#sessTable');
+  wireWhitelistButtons('#sessTable');
 }
 
 // Block / unblock handlers, shared by the sessions table and the blocked list.
@@ -416,10 +471,46 @@ async function loadBlocked(){
     <td style="max-width:360px">${esc(b.reason||'')}</td>
     <td>${b.auto==1?'<span class="chip">auto</span>':'<span class="chip">manual</span>'}</td>
     <td class="mono">${b.created?esc(new Date(b.created*1000).toLocaleString()):'—'}</td>
-    <td><button type="button" class="unblockBtn" data-ip="${esc(b.ip)}">Unblock</button></td>
+    <td><button type="button" class="iconbtn unblock unblockBtn" data-ip="${esc(b.ip)}" title="Unblock this IP">${ICONS.unlock} Unblock</button></td>
   </tr>`).join('');
   $('#blockedTable').innerHTML=head+'<tbody>'+rows+'</tbody>';
   wireBlockButtons('#blockedTable');
+}
+
+// Whitelist / un-whitelist handlers, shared by the sessions table and the
+// whitelist panel. Testing/dev IPs added here are NEVER blocked or
+// rate-limited (see m3uIsIpWhitelisted() in m3ulisterr_lib.php).
+function wireWhitelistButtons(scope){
+  document.querySelectorAll(scope+' .whitelistBtn').forEach(b=>b.addEventListener('click',async()=>{
+    const ip=b.dataset.ip;
+    const note=prompt('Note for '+ip+' (optional, e.g. "my dev machine"):','');
+    if(note===null)return;
+    b.disabled=true;
+    const r=await post('whitelist_ip',{ip:ip,note:note});
+    if(r.ok){loadSessions();}else{alert(r.error||'Failed to whitelist');b.disabled=false;}
+  }));
+  document.querySelectorAll(scope+' .unwhitelistBtn').forEach(b=>b.addEventListener('click',async()=>{
+    const ip=b.dataset.ip; b.disabled=true;
+    const r=await post('unwhitelist_ip',{ip:ip});
+    if(r.ok){loadSessions();}else{alert(r.error||'Failed to un-whitelist');b.disabled=false;}
+  }));
+}
+
+async function loadWhitelisted(){
+  const d=await api('whitelisted'); if(!d.ok)return;
+  const panel=$('#whitelistPanel');
+  if(!d.whitelisted.length){ panel.hidden=true; return; }
+  panel.hidden=false;
+  $('#whitelistCount').textContent=d.whitelisted.length+' whitelisted';
+  const head=`<thead><tr><th>IP</th><th>Note</th><th>Since</th><th>Action</th></tr></thead>`;
+  const rows=d.whitelisted.map(w=>`<tr>
+    <td class="mono">${esc(w.ip)}</td>
+    <td style="max-width:360px">${esc(w.note||'')||'<span class="muted">—</span>'}</td>
+    <td class="mono">${w.created?esc(new Date(w.created*1000).toLocaleString()):'—'}</td>
+    <td><button type="button" class="iconbtn unwhitelist unwhitelistBtn" data-ip="${esc(w.ip)}" title="Remove from whitelist">${ICONS.shieldOff} Un-whitelist</button></td>
+  </tr>`).join('');
+  $('#whitelistTable').innerHTML=head+'<tbody>'+rows+'</tbody>';
+  wireWhitelistButtons('#whitelistTable');
 }
 
 // Shows cache.json status + a rebuild button into any element id given.
@@ -482,12 +573,15 @@ async function loadConfig(){
   $('#configForm').innerHTML=Object.keys(d.fields).map(k=>{
     const [label,type,secret]=d.fields[k]; const v=d.values[k];
     if(type==='bool') return `<div class="field toggle"><input type="checkbox" id="cfg_${k}" ${v?'checked':''}><label for="cfg_${k}" style="margin:0;text-transform:none;letter-spacing:0">${esc(label)}</label></div>`;
-    if(secret) return `<div class="field"><label>${esc(label)}</label><div style="display:flex;gap:6px"><input id="cfg_${k}" type="password" autocomplete="off" spellcheck="false" value="${esc(v==null?'':v)}" style="flex:1"><button type="button" class="revealBtn" data-t="cfg_${k}" style="flex:0 0 auto">show</button></div></div>`;
+    if(secret) return `<div class="field"><label>${esc(label)}</label><div style="display:flex;gap:6px"><input id="cfg_${k}" type="password" autocomplete="off" spellcheck="false" value="${esc(v==null?'':v)}" style="flex:1"><button type="button" class="iconbtn icon-only revealBtn" data-t="cfg_${k}" title="Show / hide">${ICONS.eye}</button></div></div>`;
     return `<div class="field"><label>${esc(label)}</label><input id="cfg_${k}" value="${esc(v==null?'':v)}"></div>`;
   }).join('');
   document.querySelectorAll('.revealBtn').forEach(b=>b.addEventListener('click',()=>{
     const el=$('#'+b.dataset.t); if(!el)return;
-    if(el.type==='password'){el.type='text';b.textContent='hide';}else{el.type='password';b.textContent='show';}
+    const hidden=el.type==='password';
+    el.type=hidden?'text':'password';
+    b.innerHTML=hidden?ICONS.eyeOff:ICONS.eye;
+    b.title=hidden?'Hide':'Show';
   }));
 }
 $('#saveConfig').addEventListener('click',async()=>{

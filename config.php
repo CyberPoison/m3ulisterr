@@ -101,6 +101,22 @@ $useAllDebrid = false;
 // one TorBox key ($torboxApiKey or $debridApiKeys['torbox']).
 $useTorBox = false;
 
+// Preference weights for the AIOStreams path (Unlimited/UnlimitedFR/TV
+// accounts - see aioStreamsFindAudioLanguage() in play.php). AIOStreams often
+// offers the same release cached on more than one debrid service; when
+// candidates are otherwise equally good (same language tier, same cached
+// status, same quality rank) these weights decide how often each service
+// wins that tie - a real quality/cache difference between candidates always
+// decides first, no weight here can override that. Values are relative, not
+// required to sum to 100 - e.g. ['alldebrid' => 60, 'premiumize' => 40] gives
+// AllDebrid roughly 60% of ties and Premiumize roughly 40%. A service left
+// out of this array defaults to a weight of 50. Keys: 'alldebrid',
+// 'premiumize', 'realdebrid', 'torbox' (whichever AIOStreams itself tags).
+$aioDebridWeights = [
+    'alldebrid'  => 50,
+    'premiumize' => 50,
+];
+
 // maxResolution is the upper limit for video resolution preference in
 // pixels (e.g., 1080 for 1080p). If no links match this exact resolution,
 // the closest available resolution will be selected. If you don't have the

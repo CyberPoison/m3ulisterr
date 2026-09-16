@@ -3457,6 +3457,39 @@ function candidateQualityRank($resolution, $codec, $scheme) {
     return 6;
 }
 
+// Reorders $candidates in place so that, among genuine ties (candidates the
+// caller's later usort() will treat as equal - same tier/cached/quality), the
+// debrid service named in $weights wins that tie roughly proportionally to
+// its weight rather than 50/50. Uses the standard weighted-random-order trick:
+// give each candidate a key of pow(random 0..1, 1/weight) and sort
+// descending - a higher weight pushes the key closer to 1 (first), a lower
+// weight pushes it closer to 0 (last), and P(A ends up before B) converges to
+// weight(A) / (weight(A) + weight(B)) for any two candidates. This ONLY
+// establishes array order for the later stable usort() to preserve on ties;
+// it cannot change the outcome when tier/cached/quality genuinely differ,
+// since usort() re-sorts on those first. $weights is keyed by the same
+// uppercase service code aioStreamsFindAudioLanguage() already tags
+// candidates with ('AD', 'PM', ...); a service missing from $weights (or the
+// whole array being empty/absent) defaults to 50.
+function aioWeightedShuffle(&$candidates, $weights) {
+    foreach ($candidates as &$c) {
+        $service = strtolower($c['debrid'] === 'AD' ? 'alldebrid' : ($c['debrid'] === 'PM' ? 'premiumize'
+            : ($c['debrid'] === 'RD' ? 'realdebrid' : ($c['debrid'] === 'TB' ? 'torbox' : $c['debrid']))));
+        $weight = isset($weights[$service]) ? (float) $weights[$service] : 50.0;
+        $weight = max($weight, 0.0001); // a 0 weight would divide-by-zero below, not just lose every tie
+        $u = max(mt_rand(1, mt_getrandmax()) / mt_getrandmax(), 1e-9);
+        $c['__weightKey'] = pow($u, 1.0 / $weight);
+    }
+    unset($c);
+    usort($candidates, function ($a, $b) {
+        return $b['__weightKey'] <=> $a['__weightKey'];
+    });
+    foreach ($candidates as &$c) {
+        unset($c['__weightKey']);
+    }
+    unset($c);
+}
+
 // Wraps a resolved video URL through video_proxy.php so the SERVER fetches the
 // bytes instead of the client. Needed for AIOStreams links, which are locked to
 // whichever IP first resolved them (this server's), not the viewer's device.
@@ -3480,7 +3513,11 @@ function wrapWithVideoProxy($url) {
 // byte passthrough (frenchAioStreams): candidates are sanity-checked by file
 // size instead of an ffprobe run, so resolving never touches ffmpeg.
 function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false) {
-    global $DEBUG, $logTitle, $type, $seasonNoPad, $episodeNoPad, $frenchAioStreamsUrl, $requestedResolutionCodec;
+    global $DEBUG, $logTitle, $type, $seasonNoPad, $episodeNoPad, $frenchAioStreamsUrl, $requestedResolutionCodec, $aioDebridWeights;
+    // Older config.php files predate $aioDebridWeights - default to an empty
+    // array (aioWeightedShuffle() then falls back to 50/50 per service)
+    // rather than an undefined-variable warning.
+    $aioDebridWeights = $aioDebridWeights ?? [];
 
     $tSite = 'aioStreams_' . strtolower($languageName);
     $scheme = $requestedResolutionCodec ?? 'x264';
@@ -3670,18 +3707,19 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         return false;
     }
 
-    // Shuffle BEFORE the stable sort below, so a genuine tie (same tier, same
-    // cached status, same quality rank) resolves in random order instead of
-    // always favoring whichever debrid service AIOStreams happened to list
-    // first for that torrent. PHP's usort() is stable, so without this, equal
-    // candidates keep their original array position every time - and AIOStreams
-    // was confirmed to consistently list Premiumize-served entries ahead of
-    // AllDebrid ones for otherwise-identical candidates, meaning AllDebrid was
-    // essentially never actually selected even when it was just as good. This
-    // is purely a tie-break: tier, cached status and quality rank still fully
-    // decide the winner whenever candidates genuinely differ on any of them -
-    // this only spreads selection across debrid services when they don't.
-    shuffle($candidates);
+    // Weighted-shuffle BEFORE the stable sort below, so a genuine tie (same
+    // tier, same cached status, same quality rank) resolves according to
+    // $aioDebridWeights (config.php) instead of always favoring whichever
+    // debrid service AIOStreams happened to list first for that torrent.
+    // PHP's usort() is stable, so without this, equal candidates keep their
+    // original array position every time - and AIOStreams was confirmed to
+    // consistently list Premiumize-served entries ahead of AllDebrid ones for
+    // otherwise-identical candidates, meaning AllDebrid was essentially never
+    // actually selected even when it was just as good. This is purely a
+    // tie-break: tier, cached status and quality rank still fully decide the
+    // winner whenever candidates genuinely differ on any of them - this only
+    // biases selection across debrid services when they don't.
+    aioWeightedShuffle($candidates, $aioDebridWeights);
 
     // Explicitly requested priority order: language match tier first (a
     // confirmed-default track beats a generic "Multi" one), then
@@ -3842,11 +3880,12 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     }));
 
     if (!empty($notCached)) {
-        // Same reasoning as the shuffle() before the main sort above: $candidates
-        // is already quality-sorted by this point, so a fresh shuffle here keeps
-        // a same-tier/same-peers tie from silently favoring whichever debrid
-        // service happened to rank first earlier, rather than genuinely random.
-        shuffle($notCached);
+        // Same reasoning as the weighted shuffle before the main sort above:
+        // $candidates is already quality-sorted by this point, so a fresh
+        // weighted shuffle here keeps a same-tier/same-peers tie from
+        // silently favoring whichever debrid service happened to rank first
+        // earlier, rather than resolving it per $aioDebridWeights.
+        aioWeightedShuffle($notCached, $aioDebridWeights);
         usort($notCached, function ($a, $b) {
             if ($a['tier'] !== $b['tier']) {
                 return $a['tier'] <=> $b['tier'];

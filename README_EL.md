@@ -214,6 +214,17 @@ https://github.com/user-attachments/assets/c6af6149-c170-45fc-a6ac-32edd1b3405b
 2. Βεβαιωθείτε ότι η εφαρμογή μπορεί να δημιουργήσει έναν εγγράψιμο κατάλογο `m3ulisterr_data/` δίπλα στον ιστότοπο (δημιουργείται αυτόματα όταν είναι εγγράψιμος).
 3. Ανοίξτε το `http://YOUR_SERVER/dashboard.php`, δημιουργήστε τον λογαριασμό διαχειριστή, και συνδεθείτε. Τα δεδομένα εισάγονται στην πρώτη φόρτωση και κάθε φορά που πατάτε **Refresh data**.
 
+
+# 🙏 Special Thanks
+
+This project's source code was originally created by **Michell Smith a.k.a [gogetta69](https://github.com/gogetta69)**. 
+If you appreciate the original foundation of this project, please consider supporting them:
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Michell-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/gogetta69)
+
+The project has since been significantly refactored, modernized, and maintained by **[CyberPoison](https://github.com/CyberPoison)**.
+
+---
+
 # Αποποίηση Ευθυνών (Legal Disclaimer)
 
 Αυτό το script ανακτά πληροφορίες ταινιών από το TMDB και αναζητά σχετικό περιεχόμενο σε ιστότοπους τρίτων. Η νομιμότητα της ροής (streaming) ή λήψης περιεχομένου μέσω αυτών των ιστότοπων είναι αβέβαιη. Παρακαλούμε να είστε προσεκτικοί και να εξετάσετε τις νομικές και ηθικές συνέπειες της χρήσης αυτού του script για πρόσβαση και κατανάλωση περιεχομένου που προστατεύεται από πνευματικά δικαιώματα. Να σέβεστε πάντα τους νόμους περί πνευματικών δικαιωμάτων και τους όρους χρήσης των ιστότοπων που επισκέπτεστε.

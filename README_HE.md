@@ -206,6 +206,17 @@ https://github.com/user-attachments/assets/c6af6149-c170-45fc-a6ac-32edd1b3405b
 2. ודאו שהאפליקציה יכולה ליצור תיקייה ניתנת לכתיבה `m3ulisterr_data/`.
 3. פתחו את `http://YOUR_SERVER/dashboard.php`, צרו חשבון מנהל והתחברו.
 
+
+# 🙏 Special Thanks
+
+This project's source code was originally created by **Michell Smith a.k.a [gogetta69](https://github.com/gogetta69)**. 
+If you appreciate the original foundation of this project, please consider supporting them:
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Michell-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/gogetta69)
+
+The project has since been significantly refactored, modernized, and maintained by **[CyberPoison](https://github.com/CyberPoison)**.
+
+---
+
 # הצהרה משפטית
 
 סקריפט זה שולף מידע על סרטים מ-TMDB ומחפש תוכן קשור באתרי צד-שלישי. חוקיות ההזרמה או ההורדה דרך אתרים אלו אינה ודאית. אנא הפעילו שיקול דעת בנוגע להשלכות החוקיות והאתיות של שימוש בסקריפט זה לצריכת תוכן המוגן בזכויות יוצרים. יש לכבד תמיד חוקי זכויות יוצרים ותנאי שירות של האתרים בהם אתם מבקרים.

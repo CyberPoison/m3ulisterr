@@ -215,6 +215,17 @@ Le seguenti variabili d'ambiente possono essere utilizzate per configurare il co
 2. Assicurati che l'app possa creare una directory scrivibile `m3ulisterr_data/` accanto al sito (viene creata automaticamente se possibile).
 3. Apri `http://TUO_SERVER/dashboard.php`, crea l'account amministratore e accedi. I dati vengono importati al primo caricamento e ogni volta che premi **Aggiorna dati**.
 
+
+# 🙏 Special Thanks
+
+This project's source code was originally created by **Michell Smith a.k.a [gogetta69](https://github.com/gogetta69)**. 
+If you appreciate the original foundation of this project, please consider supporting them:
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Michell-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/gogetta69)
+
+The project has since been significantly refactored, modernized, and maintained by **[CyberPoison](https://github.com/CyberPoison)**.
+
+---
+
 # Dichiarazione di Non Responsabilità Legale
 
 Questo script recupera informazioni sui film da TMDB e cerca contenuti correlati su siti Web di terze parti. La legalità dello streaming o del download di contenuti tramite questi siti Web è incerta. Si prega di prestare attenzione e considerare le implicazioni legali ed etiche derivanti dall'utilizzo di questo script per accedere a e consumare contenuti protetti da copyright. Rispetta sempre le leggi sul copyright e i termini di servizio dei siti Web che visiti.

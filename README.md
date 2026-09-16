@@ -237,6 +237,17 @@ The following environment variables can be used to configure the container:
 2. Ensure the app can create a writable `m3ulisterr_data/` directory next to the site (it is created automatically when writable).
 3. Open `http://YOUR_SERVER/dashboard.php`, create the admin account, and sign in. Data is imported on first load and whenever you press **Refresh data**.
 
+
+# 🙏 Special Thanks
+
+This project's source code was originally created by **Michell Smith a.k.a [gogetta69](https://github.com/gogetta69)**. 
+If you appreciate the original foundation of this project, please consider supporting them:
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Michell-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/gogetta69)
+
+The project has since been significantly refactored, modernized, and maintained by **[CyberPoison](https://github.com/CyberPoison)**.
+
+---
+
 # Legal Disclaimer
 
 This script retrieves movie information from TMDB and searches for related content on third-party websites. The legality of streaming or downloading content through these websites is uncertain. Please exercise caution and consider the legal and ethical implications of using this script to access and consume copyrighted content. Always respect copyright laws and the terms of service of the websites you visit.

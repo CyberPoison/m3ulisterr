@@ -220,6 +220,17 @@ O `dashboard.php` é um painel de controle e análise autônomo e protegido por 
 2. Garanta que o app possa criar um diretório gravável `m3ulisterr_data/` junto ao site (ele é criado automaticamente quando gravável).
 3. Abra `http://SEU_SERVIDOR/dashboard.php`, crie a conta de admin, e faça o login. Os dados são importados no primeiro carregamento e sempre que você pressionar **Refresh data (Atualizar dados)**.
 
+
+# 🙏 Special Thanks
+
+This project's source code was originally created by **Michell Smith a.k.a [gogetta69](https://github.com/gogetta69)**. 
+If you appreciate the original foundation of this project, please consider supporting them:
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Michell-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/gogetta69)
+
+The project has since been significantly refactored, modernized, and maintained by **[CyberPoison](https://github.com/CyberPoison)**.
+
+---
+
 # Aviso Legal
 
 Este script recupera informações de filmes do TMDB e procura por conteúdos relacionados em sites de terceiros. A legalidade do streaming ou download de conteúdos através destes sites é incerta. Por favor, exerça cautela e considere as implicações legais e éticas do uso deste script para acessar e consumir conteúdo protegido por direitos autorais. Sempre respeite as leis de direitos autorais e os termos de serviço dos sites que você visita.

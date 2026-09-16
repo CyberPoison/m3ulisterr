@@ -214,6 +214,17 @@ https://github.com/user-attachments/assets/c6af6149-c170-45fc-a6ac-32edd1b3405b
 2. تأكد من أن التطبيق يمكنه إنشاء دليل `m3ulisterr_data/` قابل للكتابة بجوار الموقع (يتم إنشاؤه تلقائيًا عندما يكون قابلاً للكتابة).
 3. افتح `http://YOUR_SERVER/dashboard.php`، وقم بإنشاء حساب المسؤول، وسجل الدخول. يتم استيراد البيانات عند التحميل الأول وكلما ضغطت على **تحديث البيانات** (Refresh data).
 
+
+# 🙏 Special Thanks
+
+This project's source code was originally created by **Michell Smith a.k.a [gogetta69](https://github.com/gogetta69)**. 
+If you appreciate the original foundation of this project, please consider supporting them:
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Michell-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/gogetta69)
+
+The project has since been significantly refactored, modernized, and maintained by **[CyberPoison](https://github.com/CyberPoison)**.
+
+---
+
 # إخلاء مسؤولية قانوني
 
 يقوم هذا البرنامج النصي باسترداد معلومات الأفلام من TMDB والبحث عن المحتوى ذي الصلة على مواقع ويب تابعة لجهات خارجية. قانونية بث أو تنزيل المحتوى من خلال هذه المواقع غير مؤكدة. يرجى توخي الحذر والنظر في الآثار القانونية والأخلاقية لاستخدام هذا البرنامج النصي للوصول إلى المحتوى المحمي بحقوق الطبع والنشر واستهلاكه. احترم دائمًا قوانين حقوق الطبع والنشر وشروط الخدمة الخاصة بالمواقع التي تزورها.

@@ -214,6 +214,17 @@ Die folgenden Umgebungsvariablen können zur Konfiguration des Containers verwen
 2. Stellen Sie sicher, dass die App ein beschreibbares `m3ulisterr_data/`-Verzeichnis neben der Site erstellen kann (es wird automatisch erstellt, wenn es beschreibbar ist).
 3. Öffnen Sie `http://YOUR_SERVER/dashboard.php`, erstellen Sie das Administratorkonto und melden Sie sich an. Daten werden beim ersten Laden und immer dann importiert, wenn Sie **Daten aktualisieren** drücken.
 
+
+# 🙏 Special Thanks
+
+This project's source code was originally created by **Michell Smith a.k.a [gogetta69](https://github.com/gogetta69)**. 
+If you appreciate the original foundation of this project, please consider supporting them:
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Michell-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/gogetta69)
+
+The project has since been significantly refactored, modernized, and maintained by **[CyberPoison](https://github.com/CyberPoison)**.
+
+---
+
 # Rechtlicher Hinweis
 
 Dieses Skript ruft Filminformationen von TMDB ab und sucht auf Websites Dritter nach zugehörigen Inhalten. Die Legalität des Streamings oder Downloads von Inhalten über diese Websites ist ungewiss. Bitte seien Sie vorsichtig und bedenken Sie die rechtlichen und ethischen Auswirkungen der Verwendung dieses Skripts für den Zugriff auf und Konsum von urheberrechtlich geschützten Inhalten. Respektieren Sie stets die Urheberrechtsgesetze und die Nutzungsbedingungen der Websites, die Sie besuchen.

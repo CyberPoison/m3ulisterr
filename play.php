@@ -3802,9 +3802,6 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     // and the resolution/codec ladder (candidateQualityRank()) still fully
     // decides ordering *within* whichever service wins.
     $preferredService = aioPickWeightedService($candidates, $aioDebridWeights);
-    if ($DEBUG) {
-        echo "DIAGNOSTIC (temporary): aioDebridWeights=" . htmlspecialchars(json_encode($aioDebridWeights)) . " preferredService=" . htmlspecialchars(var_export($preferredService, true)) . "</br></br>";
-    }
 
     // Priority order: language match tier first (a confirmed-default track
     // beats a generic "Multi" one), then already-cached-on-the-debrid-service
@@ -3812,9 +3809,25 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     // breaking ties ahead of quality among cached candidates, then the
     // combined codec+resolution ladder - see candidateQualityRank() for the
     // two orders and which ?codec= selects which.
+    //
+    // Explicitly requested: the preferred service can now win across tiers
+    // 0-2, not only within one - tiers 0 (confirmed-first tag), 1 (Multi/VFF/
+    // VFI/French-scene-name) and 2 (proxy-mode-only, unresolved tag) all
+    // represent SOME real language match, and for the proxy path (French)
+    // every one of them gets the exact same file-header presence check
+    // before ever reaching this sort (see proxyModeLanguageVerdict() /
+    // [[aio-language-track-presence]]) - so a tier-1 candidate is just as
+    // confirmed-present as a tier-0 one by the time they're compared here.
+    // Only tier 3 (the true last resort - no language match at all, English
+    // only) stays strictly behind every real match, with or without a
+    // preference. When the preference doesn't distinguish two candidates
+    // (same service, or none configured), tier then quality decide exactly
+    // as before - the weight only jumps the tier queue, it doesn't erase it.
     usort($candidates, function ($a, $b) use ($scheme, $preferredService) {
-        if ($a['tier'] !== $b['tier']) {
-            return $a['tier'] <=> $b['tier'];
+        $aMatched = $a['tier'] <= 2 ? 0 : 1;
+        $bMatched = $b['tier'] <= 2 ? 0 : 1;
+        if ($aMatched !== $bMatched) {
+            return $aMatched <=> $bMatched;
         }
         if ($a['cached'] !== $b['cached']) {
             return ($b['cached'] ? 1 : 0) <=> ($a['cached'] ? 1 : 0);
@@ -3825,6 +3838,9 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
             if ($aPreferred !== $bPreferred) {
                 return $aPreferred <=> $bPreferred;
             }
+        }
+        if ($a['tier'] !== $b['tier']) {
+            return $a['tier'] <=> $b['tier'];
         }
         return candidateQualityRank($a['resolution'], $a['codec'], $scheme)
             <=> candidateQualityRank($b['resolution'], $b['codec'], $scheme);
@@ -3979,8 +3995,13 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         // not-yet-cached fallback, not only when something is already cached.
         shuffle($notCached);
         usort($notCached, function ($a, $b) use ($preferredService) {
-            if ($a['tier'] !== $b['tier']) {
-                return $a['tier'] <=> $b['tier'];
+            // Same tier-grouping as the cached sort above: tiers 0-2 (a real
+            // language match) grouped together so the preference can win
+            // across them, tier 3 (no match at all) always last.
+            $aMatched = $a['tier'] <= 2 ? 0 : 1;
+            $bMatched = $b['tier'] <= 2 ? 0 : 1;
+            if ($aMatched !== $bMatched) {
+                return $aMatched <=> $bMatched;
             }
             if ($preferredService !== null) {
                 $aPreferred = (aioCandidateService($a) === $preferredService) ? 0 : 1;
@@ -3988,6 +4009,9 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
                 if ($aPreferred !== $bPreferred) {
                     return $aPreferred <=> $bPreferred;
                 }
+            }
+            if ($a['tier'] !== $b['tier']) {
+                return $a['tier'] <=> $b['tier'];
             }
             return $b['peers'] <=> $a['peers'];
         });

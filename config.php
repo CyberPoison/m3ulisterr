@@ -102,22 +102,27 @@ $useAllDebrid = false;
 $useTorBox = false;
 
 // Preference weights for the AIOStreams path (Unlimited/UnlimitedFR/TV
-// accounts - see aioStreamsFindAudioLanguage() in play.php). AIOStreams often
-// offers the same release cached on more than one debrid service. On each
-// resolve, ONE of these services is picked (randomly, weighted by these
-// percentages) as the preferred service for that request - e.g.
-// ['alldebrid' => 70, 'premiumize' => 30] means AllDebrid is preferred on
-// roughly 70% of resolves. Whenever the preferred service has ANY cached
-// candidate, it's used ahead of the other service's cached candidates even
-// if the other service's cached pick is technically higher quality - useful
-// to keep load off a service with a request quota. This can only choose
-// BETWEEN cached candidates: a candidate that isn't cached on any service
-// never wins over one that is, regardless of weight (still no "wait for a
-// download" surprise), and the resolution/codec ladder (?codec=x264/x265)
-// still fully decides ranking *within* whichever service is preferred.
-// Values are relative, not required to sum to 100. A service left out of
-// this array defaults to a weight of 50. Keys: 'alldebrid', 'premiumize',
-// 'realdebrid', 'torbox' (whichever AIOStreams itself tags).
+// accounts, movies and TV shows - see aioStreamsFindAudioLanguage() in
+// play.php). AIOStreams often offers the same release cached on more than
+// one debrid service. On each resolve, ONE of these services is picked
+// (randomly, weighted by these percentages) as the preferred service for
+// that request - e.g. ['alldebrid' => 70, 'premiumize' => 30] means
+// AllDebrid is preferred on roughly 70% of resolves. Whenever the preferred
+// service has ANY cached candidate that carries a real language match
+// (English/French/etc, however confirmed - a "Multi" tag counts the same as
+// a confirmed-default one here), it's used ahead of the other service's
+// cached candidates - even a technically higher-quality or more-confirmed
+// one - useful to keep load off a service with a request quota. Still
+// absolute, regardless of weight: (1) a candidate that isn't cached on any
+// service never wins over one that is (no "wait for a download" surprise),
+// and (2) a candidate with NO language match at all (English account only,
+// last-resort original-language fallback) never wins over one that has a
+// real match. The resolution/codec ladder (?codec=x264/x265) still fully
+// decides ranking *within* whichever service is preferred, or whenever the
+// weight doesn't distinguish two candidates (e.g. both from the same
+// service). Values are relative, not required to sum to 100. A service left
+// out of this array defaults to a weight of 50. Keys: 'alldebrid',
+// 'premiumize', 'realdebrid', 'torbox' (whichever AIOStreams itself tags).
 $aioDebridWeights = [
     'alldebrid'  => 50,
     'premiumize' => 50,

@@ -228,7 +228,7 @@ if ($type == 'movies') {
 
 function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
 {
-    global $userDefinedOrder, $language, $usePremiumize, $requestedLang;
+    global $userDefinedOrder, $language, $usePremiumize, $requestedLang, $useAllDebrid, $useTorBox;
 
     $GLOBALS['m3u_resolve_start'] = microtime(true);
     $GLOBALS['m3u_selection'] = [];
@@ -370,8 +370,13 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
                         continue; //
                     }
 
-                    // Check if torrents should run.
-                    if (!$useRealDebrid && !$usePremiumize && in_array($functionName, ['torrentSites'])) {
+                    // Check if torrents should run. Must also check AllDebrid/
+                    // TorBox here (added alongside RealDebrid/Premiumize) -
+                    // otherwise a setup relying solely on either of those two
+                    // skips torrentSites entirely and neither ever gets a
+                    // chance to run, even though selectHashByPreferences()
+                    // supports both.
+                    if (!$useRealDebrid && !$usePremiumize && !$useAllDebrid && !$useTorBox && in_array($functionName, ['torrentSites'])) {
                         continue; //
                     }
 
@@ -568,7 +573,7 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
 
 function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
 {
-    global $userDefinedOrder, $episodeId, $language, $usePremiumize, $requestedLang;
+    global $userDefinedOrder, $episodeId, $language, $usePremiumize, $requestedLang, $useAllDebrid, $useTorBox;
 
     $GLOBALS['m3u_resolve_start'] = microtime(true);
     $GLOBALS['m3u_selection'] = [];
@@ -686,8 +691,13 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
                         continue; //
                     }
 
-                    // Check if torrents should run.
-                    if (!$useRealDebrid && !$usePremiumize && in_array($functionName, ['torrentSites'])) {
+                    // Check if torrents should run. Must also check AllDebrid/
+                    // TorBox here (added alongside RealDebrid/Premiumize) -
+                    // otherwise a setup relying solely on either of those two
+                    // skips torrentSites entirely and neither ever gets a
+                    // chance to run, even though selectHashByPreferences()
+                    // supports both.
+                    if (!$useRealDebrid && !$usePremiumize && !$useAllDebrid && !$useTorBox && in_array($functionName, ['torrentSites'])) {
                         continue;
                     }
 
@@ -2236,7 +2246,7 @@ function filterCompareTitles($firstTitle, $secondTitle, $tvpack=false){
 
 function torrentSites($movieId, $imdbId, $title, $year = null)
 {
-    global $timeOut, $maxResolution, $torrentData, $type, $season, $episode, $seasonNoPad, $episodeNoPad, $useRealDebrid, $usePremiumize, $deleteRDFiles;
+    global $timeOut, $maxResolution, $torrentData, $type, $season, $episode, $seasonNoPad, $episodeNoPad, $useRealDebrid, $usePremiumize, $deleteRDFiles, $useAllDebrid, $useTorBox;
 	
 	$torrentTimeOut = 5;
 
@@ -2490,9 +2500,17 @@ function torrentSites($movieId, $imdbId, $title, $year = null)
                 $pageUrl = 'https://premiumize.me/';
                 $htmlContent .= "<li>Premiumize (0) - $premTimeDifference sec.</li>";
             }
+            if ($service == 'AllDebrid') {
+                $pageUrl = 'https://alldebrid.com/';
+                $htmlContent .= "<li>AllDebrid (0) - $premTimeDifference sec.</li>";
+            }
+            if ($service == 'TorBox') {
+                $pageUrl = 'https://torbox.app/';
+                $htmlContent .= "<li>TorBox (0) - $premTimeDifference sec.</li>";
+            }
 
             $htmlContent .= '</div><a href="javascript:void(0);" onclick="openPopup(\'' . $hashedRandomId . '\')">Click to view...</a>';
-            logDetails('torrentSites', $htmlContent, 'failed', $GLOBALS['logTitle'], $pageUrl, 'n/a', $type, $GLOBALS['movieId'], $type === 'series' ? $GLOBALS['seriesCode'] : 'n/a');
+            logDetails('torrentSites', $htmlContent, 'failed', $GLOBALS['logTitle'], $pageUrl ?? 'n/a', 'n/a', $type, $GLOBALS['movieId'], $type === 'series' ? $GLOBALS['seriesCode'] : 'n/a');
 
             return false;
         }
@@ -2506,9 +2524,17 @@ function torrentSites($movieId, $imdbId, $title, $year = null)
             $pageUrl = 'https://premiumize.me/';
             $htmlContent .= "<li>Premiumize: 0</li>";
         }
+        if ($service == 'AllDebrid') {
+            $pageUrl = 'https://alldebrid.com/';
+            $htmlContent .= "<li>AllDebrid: 0</li>";
+        }
+        if ($service == 'TorBox') {
+            $pageUrl = 'https://torbox.app/';
+            $htmlContent .= "<li>TorBox: 0</li>";
+        }
 
         $htmlContent .= '</div><a href="javascript:void(0);" onclick="openPopup(\'' . $hashedRandomId . '\')">Click to view...</a>';
-        logDetails('torrentSites', $htmlContent, 'failed', $GLOBALS['logTitle'], $pageUrl, 'n/a', $type, $GLOBALS['movieId'], $type === 'series' ? $GLOBALS['seriesCode'] : 'n/a');
+        logDetails('torrentSites', $htmlContent, 'failed', $GLOBALS['logTitle'], $pageUrl ?? 'n/a', 'n/a', $type, $GLOBALS['movieId'], $type === 'series' ? $GLOBALS['seriesCode'] : 'n/a');
 
         return false;
     }
@@ -3644,6 +3670,19 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         return false;
     }
 
+    // Shuffle BEFORE the stable sort below, so a genuine tie (same tier, same
+    // cached status, same quality rank) resolves in random order instead of
+    // always favoring whichever debrid service AIOStreams happened to list
+    // first for that torrent. PHP's usort() is stable, so without this, equal
+    // candidates keep their original array position every time - and AIOStreams
+    // was confirmed to consistently list Premiumize-served entries ahead of
+    // AllDebrid ones for otherwise-identical candidates, meaning AllDebrid was
+    // essentially never actually selected even when it was just as good. This
+    // is purely a tie-break: tier, cached status and quality rank still fully
+    // decide the winner whenever candidates genuinely differ on any of them -
+    // this only spreads selection across debrid services when they don't.
+    shuffle($candidates);
+
     // Explicitly requested priority order: language match tier first (a
     // confirmed-default track beats a generic "Multi" one), then
     // already-cached-on-the-debrid-service (instant playback, no download
@@ -3803,6 +3842,11 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     }));
 
     if (!empty($notCached)) {
+        // Same reasoning as the shuffle() before the main sort above: $candidates
+        // is already quality-sorted by this point, so a fresh shuffle here keeps
+        // a same-tier/same-peers tie from silently favoring whichever debrid
+        // service happened to rank first earlier, rather than genuinely random.
+        shuffle($notCached);
         usort($notCached, function ($a, $b) {
             if ($a['tier'] !== $b['tier']) {
                 return $a['tier'] <=> $b['tier'];

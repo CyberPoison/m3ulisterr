@@ -125,6 +125,26 @@ function debridHttp($url, $method = 'GET', $postFields = null, $headers = [], $t
 // ---------------------------------------------------------------------------
 
 /**
+ * AllDebrid v4.1 /magnet/status returns files as a flat list of {n,l,s} for
+ * simple torrents, but multi-file torrents can nest folders as {n,e:[...]}.
+ * Flatten recursively so callers always see a flat list of {n,l}.
+ */
+function debridFlattenAllDebridFiles($files)
+{
+    $out = [];
+    foreach ($files as $f) {
+        if (isset($f['e']) && is_array($f['e'])) {
+            $out = array_merge($out, debridFlattenAllDebridFiles($f['e']));
+            continue;
+        }
+        if (isset($f['l'])) {
+            $out[] = $f;
+        }
+    }
+    return $out;
+}
+
+/**
  * Resolve one info-hash to a direct link via a single AllDebrid key.
  *
  * @return array [bool ready, string|false link, bool keyExhausted]
@@ -156,24 +176,30 @@ function allDebridResolveHashOnce($hash, $apiKey, $seriesCode = '', $type = 'mov
 
     // 2) Poll status briefly (cached torrents flip to Ready almost instantly;
     //    we do NOT wait for a cold download here — that would block playback).
+    // NOTE: /magnet/status (v4) was discontinued by AllDebrid — must use
+    // v4.1, which also changed the response shape: a single `magnets` object
+    // (not a list) with `status` as a string like "Ready", and a `files[]`
+    // array using `n`/`l` keys (not the old `links[]` with `filename`/`link`).
     $links = [];
     $attempts = 0;
     do {
         list($sc, $sb) = debridHttp(
-            $base . '/magnet/status?agent=' . $agent . '&apikey=' . urlencode($apiKey) . '&id=' . urlencode($magnetId)
+            'https://api.alldebrid.com/v4.1/magnet/status?agent=' . $agent . '&apikey=' . urlencode($apiKey) . '&id=' . urlencode($magnetId)
         );
         if (debridResponseIsKeyExhausted('alldebrid', $sb)) {
             return [false, false, true];
         }
         $sj = json_decode($sb, true);
         $m = isset($sj['data']['magnets']) ? $sj['data']['magnets'] : null;
-        // status endpoint may return a single object or a list depending on id
-        if (isset($m['status'])) {
+        // v4.1 returns a single object when queried by id; be defensive in
+        // case a future version wraps it in a list again.
+        if (is_array($m) && isset($m[0]) && !isset($m['status'])) {
+            $m = $m[0];
+        }
+        if (is_array($m) && isset($m['status'])) {
             $statusText = strtolower($m['status']);
-            $links = isset($m['links']) ? $m['links'] : [];
-        } elseif (is_array($m) && isset($m[0])) {
-            $statusText = strtolower($m[0]['status']);
-            $links = isset($m[0]['links']) ? $m[0]['links'] : [];
+            $files = isset($m['files']) && is_array($m['files']) ? $m['files'] : [];
+            $links = debridFlattenAllDebridFiles($files);
         } else {
             $statusText = '';
         }
@@ -193,11 +219,21 @@ function allDebridResolveHashOnce($hash, $apiKey, $seriesCode = '', $type = 'mov
         return [true, false, false];
     }
 
-    // 3) Pick the right file (episode match for series) and unlock it.
+    // 3) Pick the right file (video extension, episode match for series) and
+    //    unlock it. v4.1's `files[]` includes every file in the torrent
+    //    (subtitles, posters, samples, ...), not just the playable one, so
+    //    non-video extensions must be skipped explicitly.
+    //    The v4.1 `l` value is a share link (alldebrid.com/f/...), not yet a
+    //    direct stream — it still needs the /link/unlock call below.
+    $videoExt = ['mp4', 'mkv', 'avi', 'mov', 'flv', 'wmv', 'mpg', 'mpeg', 'm4v', 'ts', 'webm'];
     foreach ($links as $lnk) {
-        $filename = isset($lnk['filename']) ? $lnk['filename'] : '';
-        $rawLink = isset($lnk['link']) ? $lnk['link'] : '';
+        $filename = isset($lnk['n']) ? $lnk['n'] : '';
+        $rawLink = isset($lnk['l']) ? $lnk['l'] : '';
         if ($rawLink === '') {
+            continue;
+        }
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        if (!in_array($ext, $videoExt)) {
             continue;
         }
         if ($type === 'series' && $seriesCode !== '') {

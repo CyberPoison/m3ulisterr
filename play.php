@@ -3680,13 +3680,28 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         // shows up as a different release YEAR - each film in a saga has its
         // own year - so checking just the year, language-agnostically, is
         // both the safe and the effective check for this specific failure
-        // mode. A pack's own generic name (no specific film's year in it,
-        // e.g. "L'Integrale Des 8 Films") is correctly rejected too: without
-        // a year we can't confirm which film it actually is.
-        if ($type === 'movies' && !empty($releaseFilename) && !empty($GLOBALS['globalYear'])
-            && strpos($releaseFilename, $GLOBALS['globalYear']) === false) {
+        // mode.
+        //
+        // Only reject on an EXPLICIT, DIFFERENT year, not a missing one.
+        // First cut of this check rejected any filename that didn't contain
+        // the requested year at all - confirmed directly as a real
+        // regression: plenty of perfectly correct, single-movie releases
+        // (e.g. "Harry Potter and the Prisoner of Azkaban.mkv") simply don't
+        // put the year in the filename, and blanket-rejecting those dropped
+        // 6 of 8 real Harry Potter movies on the French account (vs. the
+        // pack-only test cases used while writing the original fix, which
+        // happened to all carry a year one way or another). A candidate with
+        // no year in it at all is genuinely unknown, not a confirmed
+        // mismatch - matches this file's existing pattern elsewhere of
+        // letting unknown information through rather than guessing against
+        // it. Only a filename carrying a DIFFERENT explicit 19xx/20xx year
+        // is a real, confirmed signal of a different film from the same pack.
+        preg_match('/(19|20)\d{2}/', $releaseFilename, $filenameYearMatch);
+        $filenameYear = $filenameYearMatch[0] ?? '';
+        if ($type === 'movies' && $filenameYear !== '' && !empty($GLOBALS['globalYear'])
+            && $filenameYear !== $GLOBALS['globalYear']) {
             if ($DEBUG) {
-                echo "Rejected (filename doesn't carry the requested year {$GLOBALS['globalYear']} - possible saga/pack mismatch) $languageName candidate via $tSite: $releaseFilename</br></br>";
+                echo "Rejected (filename year $filenameYear doesn't match requested year {$GLOBALS['globalYear']} - saga/pack mismatch) $languageName candidate via $tSite: $releaseFilename</br></br>";
             }
             continue;
         }

@@ -3578,24 +3578,17 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
             continue;
         }
 
-        // A plain redirect can't force an embedded player to switch audio
-        // tracks, so we need the language to actually be the *default* track,
-        // not just present somewhere in the file. The language list's order
-        // reliably mirrors the track order (confirmed by probing real files):
-        // when a release lists languages by name, whichever is named first is
-        // the first/default audio track - e.g. "English | ... | French" means
-        // English plays by default even though French is included. "Multi" is
-        // a generic summary label some providers use instead of naming every
-        // language, so it doesn't tell us the order either way.
-        //
-        // A release that names some OTHER language first is rejected outright
-        // rather than merely ranked lower. Confirmed as a real report: the
-        // English "Unlimited" account played an "ita | eng" release, which
-        // starts in Italian, because it was the only candidate left standing
-        // after the other checks. Only a confirmed-default match or a generic
-        // "Multi" is accepted now - if that leaves nothing, returning false and
-        // letting the normal provider fallback chain take over is the better
-        // failure.
+        // Policy: a release qualifies as soon as the requested language is
+        // PRESENT somewhere in it - the player itself is trusted to switch to
+        // that audio track, so the file no longer has to *start* in it. This
+        // is an explicit reversal of the previous stricter policy (which
+        // required the file's own default track to match): confirmed
+        // directly that requiring the default track was too conservative and
+        // discarded plenty of genuinely-French-audio "MULTI" releases whose
+        // container simply keeps some other track flagged as default (see
+        // proxyModeLanguageVerdict() below for where that check now lives).
+        // The 🌎 tag/name checks just below still decide TIER (priority
+        // among several valid candidates), not accept/reject.
         //
         // "Dubbed", "Dual Audio" and similar are labels, not languages -
         // confirmed on a real John Wick 3 result reading "Dubbed | English |
@@ -3623,18 +3616,21 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         } elseif ($firstLanguage === 'multi' || $frenchSceneRelease) {
             $tier = 1;
         } elseif ($proxyMode) {
-            // Tag order isn't track order, so the file may still start in the
-            // requested language. Proxy mode proves the default track from the
-            // file header before accepting any candidate - see
-            // proxyModeLanguageVerdict() - which is what makes this safe here
-            // and nowhere else.
+            // Tag order isn't proof either way - proxyModeLanguageVerdict()
+            // (below) settles it from the file header: accepted as long as
+            // the requested language is present anywhere in the file, not
+            // only as its default track.
             $tier = 2;
         } else {
-            // Neither tag nor name says the requested language is the one that
-            // plays. Accepting these was tried and confirmed wrong: Inception on
-            // UnlimitedFR resolved to an "English | Italian | French" release
-            // with an English default track.
-            continue;
+            // Non-proxy path (e.g. English/default account): neither tag nor
+            // name says the requested language is present at all. Kept as a
+            // last-resort candidate rather than discarded outright - a
+            // foreign-language film with no English dub should still play in
+            // its own original language sooner than fail with nothing.
+            // Lowest priority: the usort() below and the 15-candidate cap
+            // mean this is only ever reached once every tier 0-2 candidate
+            // has been tried and rejected by the playability checks.
+            $tier = 3;
         }
 
         preg_match('/(2160|1080|720|480|360)p/i', $stream['name'] ?? '', $resMatch);
@@ -4636,26 +4632,6 @@ function mp4AudioTracks($bytes) {
     return null;
 }
 
-// The audio track a player starts on: the first enabled track flagged
-// default, else the first enabled track.
-function effectiveDefaultAudioLanguage(array $info) {
-    $audio = array_values(array_filter($info['tracks'], function ($t) {
-        return $t['enabled'];
-    }));
-    if (empty($audio)) {
-        $audio = $info['tracks'];
-    }
-    if (empty($audio)) {
-        return null;
-    }
-    foreach ($audio as $track) {
-        if ($track['default']) {
-            return $track['lang'];
-        }
-    }
-    return $audio[0]['lang'];
-}
-
 // Downloads at most $maxBytes from the start of $url.
 function fetchMediaHead($url, $maxBytes) {
     $buffer = '';
@@ -4691,10 +4667,17 @@ function audioLanguageMatchesName($code, $languageName) {
     return in_array($base, $codes[strtolower($languageName)] ?? [strtolower($languageName)], true);
 }
 
-// Decides from the file itself whether a proxy-mode candidate starts in
-// $languageName. Returns [accepted, reason]. When the header can't settle it,
-// only a tier-0 candidate (the requested language is the only/first one
-// tagged) is trusted on its tag.
+// Decides from the file itself whether a proxy-mode candidate carries
+// $languageName as one of its audio tracks. Returns [accepted, reason].
+// Presence anywhere in the file is enough - the player is trusted to switch
+// to that track itself, so this no longer requires it to be the file's own
+// default track (reverted by explicit request; see
+// [[aio-language-track-presence]] - a MULTI release commonly ships 10-20+
+// audio tracks with only one of them flagged default, and rejecting the
+// other confirmed-present languages over that was needlessly conservative).
+// When the header can't be read at all, only a tier-0 candidate (the
+// requested language is the only/first one AIOStreams itself tagged) is
+// trusted on that tag alone - there's no stronger signal to fall back to.
 function proxyModeLanguageVerdict($finalUrl, $tier, $languageName) {
     $head = fetchMediaHead($finalUrl, 2 * 1024 * 1024);
     $info = $head !== false ? mediaHeaderAudioTracks($head) : null;
@@ -4706,21 +4689,13 @@ function proxyModeLanguageVerdict($finalUrl, $tier, $languageName) {
         return $track['lang'] . ($track['default'] ? '*' : '');
     }, $info['tracks']));
 
-    // One audio track can't start in a different language from itself, and
-    // Matroska reports an absent language tag as "eng" - so a single-track
-    // file is taken on a tier-0 tag rather than rejected over that default.
-    if (count($info['tracks']) === 1 && $tier === 0) {
-        return [true, "single audio track ($languages) on a $languageName-only tag"];
+    foreach ($info['tracks'] as $track) {
+        if (audioLanguageMatchesName($track['lang'], $languageName)) {
+            return [true, "found a $languageName track ($languages)"];
+        }
     }
 
-    $default = effectiveDefaultAudioLanguage($info);
-    if ($default === null || $default === '' || $default === 'und') {
-        return [$tier === 0, "default track language unknown ($languages)"];
-    }
-
-    return audioLanguageMatchesName($default, $languageName)
-        ? [true, "default audio track is $default ($languages)"]
-        : [false, "default audio track is $default, not $languageName ($languages)"];
+    return [false, "no $languageName track found in the file at all ($languages)"];
 }
 
 // AIOStreams can take well over the 20s global scraper timeout that

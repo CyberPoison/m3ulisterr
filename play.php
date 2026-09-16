@@ -3802,6 +3802,9 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     // and the resolution/codec ladder (candidateQualityRank()) still fully
     // decides ordering *within* whichever service wins.
     $preferredService = aioPickWeightedService($candidates, $aioDebridWeights);
+    if ($DEBUG) {
+        echo "DIAGNOSTIC (temporary): aioDebridWeights=" . htmlspecialchars(json_encode($aioDebridWeights)) . " preferredService=" . htmlspecialchars(var_export($preferredService, true)) . "</br></br>";
+    }
 
     // Priority order: language match tier first (a confirmed-default track
     // beats a generic "Multi" one), then already-cached-on-the-debrid-service

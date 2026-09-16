@@ -258,11 +258,19 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
 		exit();				
 	}		
 
-	// If the URL is found in cache and hasn't expired, perform a 301 redirect	 
+	// If the URL is found in cache and hasn't expired, perform a 301 redirect
 	if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkLinkStatusCode($cachedUrl)) {
 		if ($GLOBALS['DEBUG']) {
 			echo "Service: Pulled from the cache - Url: " . $cachedUrl . "</br></br>";
-			echo 'Debugging: Redirection to the video would have taken place here.</br></br>';			
+			echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
+			// &dev=true never redirects, but a real viewer's later cache hit on
+			// this same URL still needs a 'resolve' event to enrich its own
+			// (otherwise-empty, since a cache hit doesn't re-run the resolver)
+			// release/debrid columns from - see m3uSessions()'s "enrich" CTE in
+			// m3ulisterr_api.php. Without this, any URL that happened to get
+			// cached via a &dev=true test permanently shows blank Release/Debrid
+			// on the dashboard for every future viewer, confirmed directly.
+			m3uLogResolution($movieId, $cachedUrl, true);
 		} else {
 			m3uLogResolution($movieId, $cachedUrl, true);
 			header("HTTP/1.1 301 Moved Permanently");
@@ -524,6 +532,11 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
                                 echo "Service: " . $successfulFunctionName . ' - Url: ' . $result . "</br></br>";
                                 echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
                                 writeToCache($key, $result);
+                                // See the matching comment in the cache-hit branch
+                                // above - &dev=true still needs to log this resolve
+                                // so a later real cache hit on this same URL isn't
+                                // permanently stuck with blank release/debrid.
+                                m3uLogResolution($movieId, $result, false);
                                 exit();
                             }
                         } else {
@@ -601,6 +614,10 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
 		if ($GLOBALS['DEBUG']) {
 			echo "Service: Pulled from the cache - Url: " . $cachedUrl . "</br></br>";
 			echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
+			// See the matching comment in movieDetails_TMDB() - &dev=true must
+			// still log so a later real cache hit on this URL can enrich its
+			// own blank release/debrid from this event.
+			m3uLogResolution($movieId, $cachedUrl, true);
 		} else {
 			m3uLogResolution($movieId, $cachedUrl, true);
 			header("HTTP/1.1 301 Moved Permanently");
@@ -829,6 +846,11 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
                                 echo "Service: " . $successfulFunctionName . ' - Url: ' . $result . "</br></br>";
                                 echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
                                 writeToCache($key, $result);
+                                // See the matching comment in the cache-hit branch
+                                // above - &dev=true still needs to log this resolve
+                                // so a later real cache hit on this same URL isn't
+                                // permanently stuck with blank release/debrid.
+                                m3uLogResolution($movieId, $result, false);
                                 exit();
                             }
                         } else {

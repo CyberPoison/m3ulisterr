@@ -44,7 +44,7 @@ Genera playlist dinamiche per TV in Diretta, Film e Serie TV utilizzando una ver
     </td>
     <td style="border: none; padding-left: 10px;"> <!-- Regola il padding secondo necessità -->
       <a href="https://ko-fi.com/gogetta69">
-        <img src="https://www.ko-fi.com/img/githubbutton_sm.svg" alt="Ko-fi">
+        <img src="https://img.shields.io/badge/Ko--fi-Support-F16061?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Ko-fi">
       </a>
     </td>
   </tr>

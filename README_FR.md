@@ -44,7 +44,7 @@ Générez des listes de lecture dynamiques pour la TV en direct, les films et le
     </td>
     <td style="border: none; padding-left: 10px;"> <!-- Adjust padding as needed -->
       <a href="https://ko-fi.com/gogetta69">
-        <img src="https://www.ko-fi.com/img/githubbutton_sm.svg" alt="Ko-fi">
+        <img src="https://img.shields.io/badge/Ko--fi-Support-F16061?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Ko-fi">
       </a>
     </td>
   </tr>

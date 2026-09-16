@@ -44,7 +44,7 @@ Gere playlists dinâmicas para TV ao Vivo, Filmes e Séries de TV usando uma ver
     </td>
     <td style="border: none; padding-left: 10px;"> <!-- Ajuste o preenchimento conforme necessário -->
       <a href="https://ko-fi.com/gogetta69">
-        <img src="https://www.ko-fi.com/img/githubbutton_sm.svg" alt="Ko-fi">
+        <img src="https://img.shields.io/badge/Ko--fi-Support-F16061?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Ko-fi">
       </a>
     </td>
   </tr>

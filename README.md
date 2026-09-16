@@ -2,6 +2,10 @@
 
 [Français](README_FR.md) | [Português](README_PT.md) | [Italiano](README_IT.md) | [Ελληνικά](README_EL.md) | [العربية](README_AR.md) | [עברית](README_HE.md) | [Deutsch](README_DE.md)
 
+[![Build and Deploy](https://github.com/CyberPoison/m3ulisterr/actions/workflows/ci.yml/badge.svg)](https://github.com/CyberPoison/m3ulisterr/actions/workflows/ci.yml)
+[![Docker Image Version (latest)](https://img.shields.io/badge/docker-latest-blue.svg?logo=docker)](https://ghcr.io/cyberpoison/m3ulisterr:latest)
+
+
 ## Update 09/16/2026
 
 AllDebrid fixes, both on the AIOStreams path and the direct-torrent path:
@@ -51,7 +55,7 @@ Generate dynamic playlists for Live TV, Movies and TV Series using a mock versio
 <table style="border-collapse: collapse; border: none;">
   <tr>
     <td style="border: none;">
-      <a href="https://github.com/gogetta69/TMDB-To-VOD-Playlist/archive/refs/heads/main.zip">
+      <a href="https://github.com/CyberPoison/m3ulisterr/archive/refs/tags/latest.zip">
         <img src="https://img.shields.io/badge/Download%20ZIP-latest-blue?style=for-the-badge&logo=github" alt="Download ZIP">
       </a>
     </td>

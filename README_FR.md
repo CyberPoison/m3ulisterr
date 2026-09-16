@@ -1,5 +1,10 @@
 # TMDB to VOD : Liste de lecture gratuite de TV en direct, films et séries \[Xtream Codes & M3U8\]
 
+
+[![Build and Deploy](https://github.com/CyberPoison/m3ulisterr/actions/workflows/ci.yml/badge.svg)](https://github.com/CyberPoison/m3ulisterr/actions/workflows/ci.yml)
+[![Docker Image Version (latest)](https://img.shields.io/badge/docker-latest-blue.svg?logo=docker)](https://ghcr.io/cyberpoison/m3ulisterr:latest)
+
+
 ## Mise à jour 09/14/2026
 
 Une mise à jour majeure concernant la fiabilité, les langues, les sous-titres, l'analyse et la sécurité. Points forts :
@@ -33,7 +38,7 @@ Générez des listes de lecture dynamiques pour la TV en direct, les films et le
 <table style="border-collapse: collapse; border: none;">
   <tr>
     <td style="border: none;">
-      <a href="https://github.com/gogetta69/TMDB-To-VOD-Playlist/archive/refs/heads/main.zip">
+      <a href="https://github.com/CyberPoison/m3ulisterr/archive/refs/tags/latest.zip">
         <img src="https://img.shields.io/badge/Télécharger%20ZIP-latest-blue?style=for-the-badge&logo=github" alt="Download ZIP">
       </a>
     </td>

@@ -1,5 +1,10 @@
 # من TMDB إلى VOD: قائمة تشغيل مجانية للبث التلفزيوني المباشر، الأفلام والمسلسلات \[Xtream Codes & M3U8\]
 
+
+[![Build and Deploy](https://github.com/CyberPoison/m3ulisterr/actions/workflows/ci.yml/badge.svg)](https://github.com/CyberPoison/m3ulisterr/actions/workflows/ci.yml)
+[![Docker Image Version (latest)](https://img.shields.io/badge/docker-latest-blue.svg?logo=docker)](https://ghcr.io/cyberpoison/m3ulisterr:latest)
+
+
 ## تحديث 14/09/2026
 
 تحديث كبير يركز على الموثوقية، اللغة، الترجمة، التحليلات والأمان. أبرز الميزات:
@@ -33,7 +38,7 @@
 <table style="border-collapse: collapse; border: none;">
   <tr>
     <td style="border: none;">
-      <a href="https://github.com/gogetta69/TMDB-To-VOD-Playlist/archive/refs/heads/main.zip">
+      <a href="https://github.com/CyberPoison/m3ulisterr/archive/refs/tags/latest.zip">
         <img src="https://img.shields.io/badge/Download%20ZIP-latest-blue?style=for-the-badge&logo=github" alt="تنزيل ZIP">
       </a>
     </td>

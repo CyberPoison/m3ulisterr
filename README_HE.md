@@ -1,5 +1,10 @@
 # TMDB ל-VOD: רשימות השמעה בחינם לערוצי טלוויזיה, סרטים וסדרות \[Xtream Codes ו-M3U8\]
 
+
+[![Build and Deploy](https://github.com/CyberPoison/m3ulisterr/actions/workflows/ci.yml/badge.svg)](https://github.com/CyberPoison/m3ulisterr/actions/workflows/ci.yml)
+[![Docker Image Version (latest)](https://img.shields.io/badge/docker-latest-blue.svg?logo=docker)](https://ghcr.io/cyberpoison/m3ulisterr:latest)
+
+
 ## עדכון 14/09/2026
 
 עדכון גדול של אמינות, שפות, כתוביות, ניתוח נתונים (analytics) ואבטחה. נקודות עיקריות:
@@ -33,7 +38,7 @@
 <table style="border-collapse: collapse; border: none;">
   <tr>
     <td style="border: none;">
-      <a href="https://github.com/gogetta69/TMDB-To-VOD-Playlist/archive/refs/heads/main.zip">
+      <a href="https://github.com/CyberPoison/m3ulisterr/archive/refs/tags/latest.zip">
         <img src="https://img.shields.io/badge/Download%20ZIP-latest-blue?style=for-the-badge&logo=github" alt="הורדת ZIP">
       </a>
     </td>

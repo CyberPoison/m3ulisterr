@@ -395,6 +395,18 @@ function m3uIsIpWhitelisted($ip) {
     if ($ip === '') {
         return false;
     }
+    // Loopback is always trusted, unconditionally - it can only ever be the
+    // server calling itself (unspoofable via REMOTE_ADDR, unlike a header),
+    // and prewarm.php always resolves through --base=http://127.0.0.1. A
+    // production incident traced to exactly this: once 127.0.0.1 tripped the
+    // daily rate limit, every subsequent prewarm request for the rest of the
+    // day got the 10-minute block-notice MJPEG stream instead of a real
+    // resolve, which a HEAD request with prewarm.php's 120s timeout can never
+    // complete - every job failed with curl's http_code=0 (no response at
+    // all), not a real network error.
+    if ($ip === '127.0.0.1' || $ip === '::1') {
+        return true;
+    }
     global $ipWhitelist;
     if (is_array($ipWhitelist) && in_array($ip, $ipWhitelist, true)) {
         return true;

@@ -3656,6 +3656,41 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         $debridService = preg_match('/\[([A-Za-z]{2,4})\s*[\x{26A1}\x{23F3}]/u', $streamName, $svcMatch) ? strtoupper($svcMatch[1]) : '';
         $releaseFilename = $stream['behaviorHints']['filename'] ?? '';
 
+        // A torrent can bundle an entire saga in one file per movie (e.g. a
+        // "Harry.Potter.L.Integrale.Des.8.Films..." pack) - AIOStreams' own
+        // addons are responsible for resolving each IMDB-id query to the
+        // right file inside a pack like that, and normally do (confirmed
+        // directly on a real "L'Integrale Des 8 Films" pack: the resolved
+        // file's own embedded title tag and runtime matched "Chamber of
+        // Secrets (2002)" exactly, the movie actually requested), but
+        // nothing on our side was actually confirming it - this path never
+        // cross-checked a candidate's identity at all.
+        //
+        // filterCompareTitles() (used by every torrentSites scraper
+        // function) is NOT a safe fit here: it substring-matches the
+        // requested title's own text against the filename, which only works
+        // when both are the same language - confirmed directly, it rejects
+        // this exact valid French release ("...Chambre.Des.Secrets...")
+        // against the English TMDB title ("...Chamber of Secrets...") even
+        // though it's the correct file, since AIOStreams French candidates
+        // are routinely named in French. Using it here would reject most
+        // legitimate French candidates, not just genuine pack mismatches.
+        //
+        // A same-saga pack mismatch (the one real risk here) almost always
+        // shows up as a different release YEAR - each film in a saga has its
+        // own year - so checking just the year, language-agnostically, is
+        // both the safe and the effective check for this specific failure
+        // mode. A pack's own generic name (no specific film's year in it,
+        // e.g. "L'Integrale Des 8 Films") is correctly rejected too: without
+        // a year we can't confirm which film it actually is.
+        if ($type === 'movies' && !empty($releaseFilename) && !empty($GLOBALS['globalYear'])
+            && strpos($releaseFilename, $GLOBALS['globalYear']) === false) {
+            if ($DEBUG) {
+                echo "Rejected (filename doesn't carry the requested year {$GLOBALS['globalYear']} - possible saga/pack mismatch) $languageName candidate via $tSite: $releaseFilename</br></br>";
+            }
+            continue;
+        }
+
         // Peer/seeder count - "👥 N" in the description. Used to pick the
         // single best bet among not-yet-cached candidates (more peers means
         // a faster download) rather than trying many different torrents in
@@ -3998,9 +4033,10 @@ function waitForAioStreamsCachingCompletion($url, $declaredBitrateMbps, $maxWait
 // the duration check (see isAioStreamsLinkDurationOk()) - that one still
 // runs sequentially, but only for whichever candidate the caller actually
 // wants to try, not every candidate up front.
-function checkAioStreamsLinksPlayableBatch(array $urls) {
+function checkAioStreamsLinksPlayableBatchOnce(array $urls) {
     $mh = curl_multi_init();
     $handles = [];
+    $totalSizes = [];
 
     foreach ($urls as $url) {
         $ch = curl_init($url);
@@ -4043,19 +4079,29 @@ function checkAioStreamsLinksPlayableBatch(array $urls) {
         $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
 
         $ok = true;
+        $transient = false;
         $reason = '';
 
         if ($body === false || $httpCode >= 400) {
             $ok = false;
+            // 4xx is a real rejection (bad/expired link); 5xx and 0 (curl
+            // never got a response at all - timeout, connection reset) are
+            // the elfhosted-side backend hiccups confirmed directly: the
+            // exact same URL that failed here with a 503 resolved cleanly on
+            // a plain manual retry moments later, so these are worth one
+            // retry rather than an immediate permanent rejection.
+            $transient = ($httpCode === 0 || $httpCode >= 500);
             $reason = "request failed - httpCode=$httpCode, curlError=$curlError";
         } elseif (stripos((string) $finalUrl, 'slate.elfhosted.com') !== false) {
             // Surfaces which specific slate variant (wrong IP, expired, not
             // cached, etc.) production itself actually hit, and what IP
             // production's own outbound request appeared as to elfhosted -
-            // both otherwise invisible from outside production.
+            // both otherwise invisible from outside production. This is a
+            // genuine "not ready" signal, not a hiccup - retrying instantly
+            // won't change it, so not marked transient.
             $ok = false;
             $reason = "slate.elfhosted.com redirect - finalUrl=$finalUrl";
-        } elseif ($contentType !== '' && stripos($contentType, 'video/') === false && stripos($contentType, 'application/octet-stream') === false) {
+        } elseif (!empty($contentType) && stripos($contentType, 'video/') === false && stripos($contentType, 'application/octet-stream') === false) {
             // A real video response is either a real video/* content-type,
             // or (for a range request against a server that doesn't echo one
             // back) at least a binary-looking payload - the slate error
@@ -4064,14 +4110,55 @@ function checkAioStreamsLinksPlayableBatch(array $urls) {
             // don't happen to redirect through that exact host.
             $ok = false;
             $reason = "content-type - httpCode=$httpCode, contentType=$contentType, finalUrl=$finalUrl";
+        } elseif (empty($contentType) && $httpCode >= 300 && $httpCode < 400) {
+            // Confirmed directly: a multi-hop redirect chain (aiostreams ->
+            // mediafusion/comet -> debrid host) that gets cut short mid-chain
+            // (elfhosted-side latency during the exact window above) leaves
+            // curl reporting the LAST redirect's own 3xx status with no
+            // content-type yet known - httpCode alone looks harmless (not an
+            // error), but $finalUrl here is still just another redirect hop,
+            // not the real playable resource, so accepting it would hand the
+            // caller a URL that only redirects again instead of streaming.
+            // Same retry treatment as a straight 5xx.
+            $ok = false;
+            $transient = true;
+            $reason = "stalled mid-redirect - httpCode=$httpCode, finalUrl=$finalUrl";
         }
 
-        $results[$url] = ['ok' => $ok, 'finalUrl' => (string) $finalUrl, 'reason' => $reason, 'totalBytes' => $totalSizes[$url] ?? 0];
+        $results[$url] = ['ok' => $ok, 'transient' => $transient, 'finalUrl' => (string) $finalUrl, 'reason' => $reason, 'totalBytes' => $totalSizes[$url] ?? 0];
 
         curl_multi_remove_handle($mh, $ch);
         curl_close($ch);
     }
     curl_multi_close($mh);
+
+    return $results;
+}
+
+// Same checks as checkAioStreamsLinksPlayableBatchOnce(), but a failure
+// flagged 'transient' (an elfhosted-side backend hiccup - a 5xx/timeout, or a
+// redirect chain that got cut short mid-way) gets exactly one retry before
+// being accepted as a real rejection. A genuine "not ready yet" signal
+// (slate.elfhosted.com, a real non-video content-type, a 4xx) is never
+// retried - retrying instantly wouldn't change that answer and would only
+// slow the batch down for candidates that were correctly rejected the first
+// time.
+function checkAioStreamsLinksPlayableBatch(array $urls) {
+    $results = checkAioStreamsLinksPlayableBatchOnce($urls);
+
+    $retryUrls = [];
+    foreach ($results as $url => $r) {
+        if (!$r['ok'] && $r['transient']) {
+            $retryUrls[] = $url;
+        }
+    }
+
+    if (!empty($retryUrls)) {
+        $retryResults = checkAioStreamsLinksPlayableBatchOnce($retryUrls);
+        foreach ($retryResults as $url => $r) {
+            $results[$url] = $r;
+        }
+    }
 
     return $results;
 }

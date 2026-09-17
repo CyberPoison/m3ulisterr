@@ -244,6 +244,14 @@ The following environment variables can be used to configure the container:
 
 # 🔄 Updates & Changelog
 
+### 📅 Update 09/17/2026
+
+**Weighted AllDebrid/Premiumize preference now forceful, plus a real dead-link check:**
+- **`$aioDebridWeights` is now a genuine per-resolve preference, not a tie-break:** a weight like `alldebrid => 70, premiumize => 30` makes AllDebrid win roughly 70% of resolves - overriding both quality rank AND language-match tier (a French "Multi" release can now beat a French confirmed-default one from the other service) - specifically to keep call volume off a quota-limited service. A cached candidate still always beats a not-yet-cached one regardless of weight.
+- **A weight of exactly 0 is now a hard exclusion:** setting a service to `0` (e.g. `alldebrid => 100, premiumize => 0`) removes that service's candidates from consideration entirely, not just deprioritizes them - if the other service then has nothing cached for a title, the resolve falls through to the next provider rather than ever using the zeroed-out service.
+- **Fixed a cache-hit link-liveness check that was a no-op:** the check guarding whether a cached stream URL is still safe to redirect a viewer to used to unconditionally trust any `video_proxy.php` link without actually checking it - which is virtually every AIOStreams candidate. A cached link that went dead upstream (a genuine `502` from the CDN) was still being blindly served to real players. Now issues a real check against the link before trusting it, so a dead cached link correctly triggers a fresh resolve instead.
+- **Verified against live production data**, including forcing and confirming both failure and recovery of a real dead cached link, and confirming the weight/exclusion logic on real titles with genuine cross-service competition.
+
 ### 📅 Update 09/16/2026
 
 **AllDebrid fixes, both on the AIOStreams path and the direct-torrent path:**

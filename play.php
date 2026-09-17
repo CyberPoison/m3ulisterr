@@ -10,6 +10,20 @@ require_once 'config.php';
 require_once 'm3ulisterr_lib.php';
 require_once 'debrid.php';
 
+// Moved here, ahead of the previewBlock admin-preview block below (this used
+// to run after it, at the top of "Run Script") - a stray PHP notice/warning
+// from ANYTHING between here and the real error_reporting(0) further down
+// (previously: previewBlock's own image/video rendering) gets echoed straight
+// into what's supposed to be a binary image/video response, corrupting it.
+// Confirmed directly against a newer PHP build whose stricter deprecation
+// notices did exactly that to the block-notice video stream.
+if (isset($_GET['dev']) && $_GET['dev'] === 'true') {
+    $GLOBALS['DEBUG'] = true;
+}
+if (!$GLOBALS['DEBUG']) {
+    error_reporting(0);
+}
+
 // MUST be defined here, at the very top - NOT down next to fetchAioStreamsList()
 // where it conceptually belongs. This is a single top-to-bottom script: a
 // define() only takes effect once the interpreter's execution pointer
@@ -36,7 +50,7 @@ if (isset($_GET['previewBlock'])) {
         if ($rawPreview) {
             m3uServeBlockScreen($message, $title); // exits
         }
-        m3uServeBlockStream($message, $title, $previewSec); // exits
+        m3uServeBlockVideoStream($message, $title, $previewSec); // exits
     };
     if ($pv === 'movie' || $pv === 'movies') {
         $lim = isset($dailyMovieLimit) ? (int) $dailyMovieLimit : 0;
@@ -53,14 +67,6 @@ if (isset($_GET['previewBlock'])) {
     $serve('Your IP has been blocked due to too many movie / TV show requests.', 'Access blocked');
 }
 accessLog();
-
-
-if (isset($_GET['dev']) && $_GET['dev'] === 'true') {
-$GLOBALS['DEBUG'] = true;	
-}	
-if (!$GLOBALS['DEBUG']) {
-    error_reporting(0);	
-} 
 
 if (isset($GLOBALS['DEBUG']) && isset($HTTP_PROXY) && isset($USE_HTTP_PROXY) && $USE_HTTP_PROXY === true) {
     echo "Proxy Enabled - Proxy Server: $HTTP_PROXY <br><br>";
@@ -152,7 +158,7 @@ if ($clientIp !== '' && !m3uIsIpWhitelisted($clientIp)) {
     //    until an admin unblocks the IP.
     list($ipBlocked, $ipBlockReason) = m3uIpBlockStatus($clientIp);
     if ($ipBlocked) {
-        m3uServeBlockStream($ipBlockReason !== '' ? $ipBlockReason
+        m3uServeBlockVideoStream($ipBlockReason !== '' ? $ipBlockReason
             : 'Your IP has been blocked due to too many movie / TV show requests.', 'Access blocked');
     }
 
@@ -169,12 +175,12 @@ if ($clientIp !== '' && !m3uIsIpWhitelisted($clientIp)) {
         $usage = m3uIpUsageToday($clientIp);
         $typeLim = ($mediaKind === 'series') ? $episodeLim : $movieLim;
         if ($typeLim > 0 && $typeCount > $typeLim) {
-            m3uServeBlockStream('Blocked: you reached the maximum limit of requesting '
+            m3uServeBlockVideoStream('Blocked: you reached the maximum limit of requesting '
                 . ($mediaKind === 'series' ? 'TV shows' : 'movies') . ' per day ('
                 . $typeLim . ').', 'Daily limit reached');
         }
         if ($totalLim > 0 && $usage['total'] > $totalLim) {
-            m3uServeBlockStream('Blocked: you reached the maximum limit of requesting movies / TV shows per day ('
+            m3uServeBlockVideoStream('Blocked: you reached the maximum limit of requesting movies / TV shows per day ('
                 . $totalLim . ').', 'Daily limit reached');
         }
     }
@@ -253,10 +259,8 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
 	$cachedUrl = readFromCache($key);	
 	
 	if($cachedUrl === '_failed_' && $GLOBALS['DEBUG'] === false){
-		http_response_code(404);
-		echo "The requested resource was not found.";
-		exit();				
-	}		
+		m3uServeUnavailableNotice(); // exits
+	}
 
 	// If the URL is found in cache and hasn't expired, perform a 301 redirect
 	if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkLinkStatusCode($cachedUrl)) {
@@ -554,6 +558,7 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
             }
 			if (!$GLOBALS['DEBUG']) {
 				writeToCache($key, '_failed_', '3600', false);
+				m3uServeUnavailableNotice(); // exits
 			 }
             http_response_code(404);
             echo "The requested resource was not found.";
@@ -566,6 +571,7 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
             }
 			if (!$GLOBALS['DEBUG']) {
 				writeToCache($key, '_failed_', '3600', false);
+				m3uServeUnavailableNotice(); // exits
 			 }
             http_response_code(404);
             echo "The requested resource was not found.";
@@ -577,6 +583,7 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
         }
 		if (!$GLOBALS['DEBUG']) {
 			writeToCache($key, '_failed_', '3600', false);
+			m3uServeUnavailableNotice(); // exits
 		}
         http_response_code(404);
         echo "The requested resource was not found.";
@@ -604,10 +611,8 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
     $cachedUrl = readFromCache($key);
 	
 	if($cachedUrl === '_failed_' && $GLOBALS['DEBUG'] === false){
-		http_response_code(404);
-		echo "The requested resource was not found.";
-		exit();				
-	}	
+		m3uServeUnavailableNotice(); // exits
+	}
 
     // If the URL is found in cache and hasn't expired, perform a 301 redirect
 	if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkLinkStatusCode($cachedUrl)) {
@@ -868,6 +873,7 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
             }
 			if (!$GLOBALS['DEBUG']) {
 				writeToCache($key, '_failed_', '3600', false);
+				m3uServeUnavailableNotice(); // exits
 			}
             http_response_code(404);
             echo "The requested resource was not found.";
@@ -880,6 +886,7 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
             }
 			if (!$GLOBALS['DEBUG']) {
 				writeToCache($key, '_failed_', '3600', false);
+				m3uServeUnavailableNotice(); // exits
 			}
             http_response_code(404);
             echo "The requested resource was not found.";
@@ -891,6 +898,7 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
         }
 		if (!$GLOBALS['DEBUG']) {
 			writeToCache($key, '_failed_', '3600', false);
+			m3uServeUnavailableNotice(); // exits
 		}
         http_response_code(404);
         echo "The requested resource was not found.";
@@ -905,15 +913,13 @@ function playAdultVideo($movieId) {
 		$cachedUrl = readFromCache($key);	
 		
 		if($cachedUrl === '_failed_' && $GLOBALS['DEBUG'] === false){
-			http_response_code(404);
-			echo "The requested resource was not found.";
-			exit();				
-		}	
+			m3uServeUnavailableNotice(); // exits
+		}
 
 		if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkLinkStatusCode($cachedUrl)) {
 			if ($GLOBALS['DEBUG']) {
 				echo "Service: Pulled from the cache - Url: " . $cachedUrl . "</br></br>";
-				echo 'Debugging: Redirection to the video would have taken place here.</br></br>';			
+				echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
 			} else {
 				m3uLogResolution($movieId, $cachedUrl, true);
 				header("HTTP/1.1 301 Moved Permanently");
@@ -949,8 +955,9 @@ function playAdultVideo($movieId) {
 				echo "Adult movie not found";
 			} else {
 				writeToCache($key, '_failed_', '3600', false);
+				m3uServeUnavailableNotice(); // exits
 			}
-			http_response_code(404);           
+			http_response_code(404);
             exit;
         }
 
@@ -965,8 +972,9 @@ function playAdultVideo($movieId) {
                 echo "No encoded sources found for adult video.";
             } else {
                 writeToCache($key, '_failed_', '3600', false);
+                m3uServeUnavailableNotice(); // exits
             }
-            http_response_code(404);      
+            http_response_code(404);
             exit();
         }
 
@@ -978,6 +986,7 @@ function playAdultVideo($movieId) {
                 echo "Failed to decode sources string.";
             } else {
                 writeToCache($key, '_failed_', '3600', false);
+                m3uServeUnavailableNotice(); // exits
             }
             http_response_code(404);
             exit();
@@ -1031,20 +1040,25 @@ function playAdultVideo($movieId) {
 			echo "No valid sources found";
 		}  else {
 				writeToCache($key, '_failed_', '3600', false);
+				m3uServeUnavailableNotice(); // exits
 			}
-		http_response_code(404);      
+		http_response_code(404);
         exit();
     } catch (Exception $e) {
 		if ($GLOBALS['DEBUG']) {
 			echo "Error: " . $e->getMessage();
 		}  else {
 			writeToCache($key, '_failed_', '3600', false);
+			m3uServeUnavailableNotice(); // exits
 		}
-		http_response_code(404);      
+		http_response_code(404);
         exit();
     }
 	writeToCache($key, '_failed_', '3600', false);
-	http_response_code(404);      
+	if (!$GLOBALS['DEBUG']) {
+		m3uServeUnavailableNotice(); // exits
+	}
+	http_response_code(404);
 	exit();
 }
 
@@ -3074,6 +3088,9 @@ function throttleRequest($key) {
     }
     
     if ($runningUrl === '_running_' || $runningUrl === null || $runningUrl === '_failed_') {
+        if (!$GLOBALS['DEBUG']) {
+            m3uServeUnavailableNotice(); // exits
+        }
         http_response_code(404);
         echo "The requested resource was not found.";
         exit;

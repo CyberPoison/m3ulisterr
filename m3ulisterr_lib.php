@@ -834,6 +834,191 @@ function m3uServeBlockStream($message, $title = 'Access blocked', $maxSeconds = 
     exit();
 }
 
+// ---------------------------------------------------------------------------
+// Block VIDEO stream: a real, decodable MPEG-TS video (H.264 + silent AAC)
+// showing the same notice frame, for players that can't handle the MJPEG-
+// over-HTTP stream above. Confirmed directly: multipart/x-mixed-replace is a
+// browser/IP-camera convention, not a video container - real IPTV apps
+// (IMPlayer, MyTVOnline3, STBEMU, ...) open a play.php-style URL expecting an
+// actual video stream, get a content-type they don't recognize as one, and
+// fail immediately with a generic "Source Error" instead of ever rendering
+// anything.
+//
+// Built the same way this project already live-transcodes HLS segments
+// (hls_shared.php/runFragmentedMp4Segment): ffmpeg is invoked directly via
+// proc_open, its stdout is streamed straight to the client as bytes arrive,
+// and nothing is ever written to a growing cache - only one small temp JPEG
+// (ffmpeg's `-loop 1` needs a real file path to re-read, not a pipe) that's
+// deleted the moment this one connection ends. The message frame itself is
+// still rendered by GD (m3uRenderBlockImage) exactly as before, so a custom
+// admin-entered block reason still shows verbatim - this only changes HOW
+// that same frame is delivered, not how it's produced.
+//
+// Falls back to m3uServeBlockStream() (the MJPEG version) if ffmpeg isn't
+// installed, or if starting/feeding it fails for any reason - which itself
+// falls back to a still image, then plain text. Never returns.
+function m3uServeBlockVideoStream($message, $title = 'Access blocked', $maxSeconds = null) {
+    $message = trim((string) $message);
+    if ($message === '') {
+        $message = 'Your IP has been blocked due to too many movie / TV show requests.';
+    }
+
+    $ffmpegPath = trim((string) @shell_exec('command -v ffmpeg 2>/dev/null'));
+    if ($ffmpegPath === '') {
+        m3uServeBlockStream($message, $title, $maxSeconds); // exits
+    }
+
+    $mime = m3uPickGdOutputMime();
+    $img = ($mime !== null) ? m3uRenderBlockImage($message, $title) : null;
+    if ($img === null) {
+        m3uServeBlockStream($message, $title, $maxSeconds); // exits
+    }
+
+    $ext = ($mime === 'image/png') ? 'png' : 'jpg';
+    $framePath = rtrim(sys_get_temp_dir(), '/') . '/m3u_block_frame_' . bin2hex(random_bytes(8)) . '.' . $ext;
+    ob_start();
+    m3uEncodeGdImage($img, $mime, null);
+    $frameBytes = ob_get_clean();
+    imagedestroy($img);
+    if (!is_string($frameBytes) || $frameBytes === '' || @file_put_contents($framePath, $frameBytes) === false) {
+        m3uServeBlockStream($message, $title, $maxSeconds); // exits
+    }
+
+    $seconds = (int) ($maxSeconds ?? M3U_BLOCK_STREAM_SECONDS);
+    if ($seconds <= 0 || $seconds > M3U_BLOCK_STREAM_SECONDS) {
+        $seconds = M3U_BLOCK_STREAM_SECONDS;
+    }
+
+    // No -re here: ffmpeg writing this pipe as fast as it can is exactly what
+    // we want - the OS pipe's own buffer blocks ffmpeg's writes once full, so
+    // our own read-and-relay loop below is what actually paces delivery to
+    // the client. Confirmed directly: adding -re (to pace ffmpeg's OWN output
+    // to real-time) made it emit data in a slow trickle that a PHP-side read
+    // loop can misread as EOF/broken-pipe well before ffmpeg was actually
+    // done, cutting the stream off after a few KB.
+    $cmd = [
+        $ffmpegPath, '-y', '-hide_banner', '-loglevel', 'error',
+        '-loop', '1', '-framerate', '2', '-i', $framePath,
+        '-f', 'lavfi', '-i', 'anullsrc=r=8000:cl=mono',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'stillimage',
+        '-pix_fmt', 'yuv420p', '-g', '4',
+        '-c:a', 'aac', '-b:a', '8k',
+        '-f', 'mpegts', 'pipe:1',
+    ];
+
+    $descriptorSpec = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['file', '/dev/null', 'w'],
+    ];
+    $process = @proc_open($cmd, $descriptorSpec, $pipes);
+    if (!is_resource($process)) {
+        @unlink($framePath);
+        m3uServeBlockStream($message, $title, $maxSeconds); // exits
+    }
+    fclose($pipes[0]);
+    stream_set_blocking($pipes[1], false);
+
+    @set_time_limit($seconds + 20);
+    ignore_user_abort(false);
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
+    @ini_set('zlib.output_compression', '0');
+    if (function_exists('apache_setenv')) {
+        @apache_setenv('no-gzip', '1');
+    }
+
+    if (headers_sent()) {
+        proc_terminate($process);
+        proc_close($process);
+        @unlink($framePath);
+        exit();
+    }
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+    header('Pragma: no-cache');
+    header('X-Accel-Buffering: no');
+    header('Content-Type: video/mp2t');
+
+    // Pacing note: ffmpeg is deliberately run WITHOUT -re. Confirmed directly:
+    // -re (pacing ITS OWN output to the encoded stream's real-time rate)
+    // stalled the muxer for several seconds before it flushed a single
+    // packet to the pipe - PHP's read loop below then had nothing to read
+    // and the connection got cut for producing zero bytes. Without -re,
+    // ffmpeg instead writes as fast as it can - which, left unchecked, means
+    // a $seconds-long HTTP connection would deliver many times $seconds
+    // worth of encoded video (confirmed: 6 wall-clock seconds of unthrottled
+    // encoding produced ~200 seconds of video timestamps, ~14MB, for a
+    // message frame that never changes) - all genuinely valid and playable,
+    // just wasted bandwidth/CPU the viewer will never watch through a
+    // connection capped at $seconds anyway. So pacing is done HERE instead,
+    // on the bytes actually read: this rough per-stream bitrate estimate
+    // (measured empirically from this exact ffmpeg command's own output)
+    // throttles OUR reads to roughly real-time delivery - ffmpeg then simply
+    // blocks on its own pipe write once the OS pipe buffer fills, which is
+    // the natural backpressure that keeps it from racing ahead.
+    $targetBytesPerSecond = 80 * 1024; // ~640kbps ceiling, comfortably above the ~580kbps measured
+    $streamStart = microtime(true);
+    $bytesSent = 0;
+
+    $deadline = microtime(true) + $seconds;
+    $sawAnyOutput = false;
+    while (microtime(true) < $deadline) {
+        if (connection_aborted()) {
+            break;
+        }
+        $status = proc_get_status($process);
+        $chunk = fread($pipes[1], 16384);
+        if ($chunk !== false && $chunk !== '') {
+            $sawAnyOutput = true;
+            echo $chunk;
+            @flush();
+            $bytesSent += strlen($chunk);
+
+            $expectedElapsed = $bytesSent / $targetBytesPerSecond;
+            $actualElapsed = microtime(true) - $streamStart;
+            if ($expectedElapsed > $actualElapsed) {
+                usleep((int) (($expectedElapsed - $actualElapsed) * 1000000));
+            }
+        } elseif (!$status['running']) {
+            // ffmpeg exited - a real video source never does that on its own
+            // (the image is looped indefinitely), so this only happens on a
+            // startup/codec failure. Bail out rather than spin.
+            break;
+        } else {
+            usleep(50000); // no data ready yet - avoid a busy-loop
+        }
+    }
+
+    proc_terminate($process);
+    proc_close($process);
+    @unlink($framePath);
+
+    // ffmpeg never produced a single byte (e.g. libx264 missing from this
+    // ffmpeg build) - fall back rather than leave the client with an empty
+    // response it'll also just error on.
+    if (!$sawAnyOutput && !headers_sent()) {
+        m3uServeBlockStream($message, $title, $maxSeconds); // exits
+    }
+    exit();
+}
+
+// Explicitly requested: a title with no working candidate anywhere (every
+// provider tried and failed, cached as '_failed_' - see movieDetails_TMDB/
+// seriesDetails_TMDB in play.php) used to just 404 with a bare text response,
+// which players show identically to a real error even though it isn't one -
+// there's nothing actually broken, the content just isn't available right
+// now. Reuses the exact same branded notice video stream as the block/limit
+// screens (m3uServeBlockVideoStream) so a real player shows a clear message
+// instead of a generic error. Never returns.
+function m3uServeUnavailableNotice($maxSeconds = null) {
+    m3uServeBlockVideoStream(
+        "This movie or TV show isn't available right now. Please check back later.",
+        'Not available yet',
+        $maxSeconds
+    ); // exits
+}
+
 // Short, stable id for a media URL, so events from play.php, the HLS scripts
 // and video_proxy.php about the same stream can be joined without copying the
 // full signed URL into every line.

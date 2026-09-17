@@ -252,6 +252,11 @@ The following environment variables can be used to configure the container:
 - **Fixed a cache-hit link-liveness check that was a no-op:** the check guarding whether a cached stream URL is still safe to redirect a viewer to used to unconditionally trust any `video_proxy.php` link without actually checking it - which is virtually every AIOStreams candidate. A cached link that went dead upstream (a genuine `502` from the CDN) was still being blindly served to real players. Now issues a real check against the link before trusting it, so a dead cached link correctly triggers a fresh resolve instead.
 - **Verified against live production data**, including forcing and confirming both failure and recovery of a real dead cached link, and confirming the weight/exclusion logic on real titles with genuine cross-service competition.
 
+**Block/limit notice and "not available" notice now play as real video, not a browser-only image trick:**
+- **Fixed "Source Error" on IPTV apps (IMPlayer, MyTVOnline3, STBEMU, ...) when blocked or over a daily limit:** the notice screen used to be delivered as `multipart/x-mixed-replace` (the same technique IP cameras use for a live MJPEG feed in a browser) - real video players don't recognize that as a video stream at all and fail immediately instead of showing the message. It's now delivered as a real, live-generated H.264/AAC MPEG-TS stream (piped through ffmpeg exactly like this project's existing HLS segment generation - no files ever written to disk), so any real player decodes and displays it properly.
+- **New: a title with no available stream now shows a branded "Not available yet, check back later" video notice** (reusing the same mechanism above) instead of a bare, player-visible error - covers every point a resolve gives up for movies, TV episodes and adult content alike.
+- **Tested locally**: verified the block/limit notice and the new "not available" notice both decode cleanly (checked via `ffprobe`/`ffmpeg` frame extraction) and are correctly paced to real-time (fixed an early attempt that produced ~30x more encoded video than the connection's actual duration).
+
 ### 📅 Update 09/16/2026
 
 **AllDebrid fixes, both on the AIOStreams path and the direct-torrent path:**

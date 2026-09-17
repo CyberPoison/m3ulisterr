@@ -123,6 +123,15 @@ $useTorBox = false;
 // service). Values are relative, not required to sum to 100. A service left
 // out of this array defaults to a weight of 50. Keys: 'alldebrid',
 // 'premiumize', 'realdebrid', 'torbox' (whichever AIOStreams itself tags).
+//
+// Setting a service to EXACTLY 0 is a hard exclusion, not just a strong
+// deprioritization: its candidates are removed from the list entirely,
+// before tiers/quality are even considered - so e.g. ['alldebrid' => 100,
+// 'premiumize' => 0] means only AllDebrid candidates are ever considered,
+// including the true last-resort tier; if AllDebrid has nothing cached for a
+// title, this falls through to the next provider entirely rather than ever
+// using Premiumize. Only an explicit 0 here triggers this - a service simply
+// left out of this array is unaffected (still defaults to weight 50).
 $aioDebridWeights = [
     'alldebrid'  => 50,
     'premiumize' => 50,

@@ -3833,6 +3833,30 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         return false;
     }
 
+    // Explicitly requested: at a hard 100/0 split (one service's weight set
+    // to exactly 0 in $aioDebridWeights), the OTHER service's candidates
+    // should never appear at all - not just lose every preference/tie check,
+    // but be excluded from the tier list outright, including the true
+    // last-resort tier. Only a service EXPLICITLY configured at 0 is
+    // excluded this way - one simply left out of $aioDebridWeights (defaults
+    // to 50 in aioPickWeightedService()) is unaffected, so this only kicks
+    // in when the user deliberately zeroes a service out.
+    $zeroWeightServices = array_keys(array_filter($aioDebridWeights, function ($w) {
+        return (float) $w === 0.0;
+    }));
+    if (!empty($zeroWeightServices)) {
+        $candidates = array_values(array_filter($candidates, function ($c) use ($zeroWeightServices) {
+            return !in_array(aioCandidateService($c), $zeroWeightServices, true);
+        }));
+        if (empty($candidates)) {
+            if ($DEBUG) {
+                echo "No $languageName-audio streams left via $tSite after excluding zero-weight service(s): " . implode(', ', $zeroWeightServices) . "</br></br>";
+            }
+            logDetails($tSite, 'none', 'failed', $logTitle, $streamUrl, 'n/a', $type, $movieId, $type === 'series' ? $GLOBALS['seriesCode'] : 'n/a');
+            return false;
+        }
+    }
+
     // Plain shuffle first so array order never silently decides a genuine
     // same-service tie (AIOStreams' own listing order is not meaningful).
     shuffle($candidates);

@@ -158,11 +158,13 @@ docker run -d \
   ghcr.io/cyberpoison/m3ulisterr:latest
 
 # 4. Start a lightweight proxy to fix VPN asymmetric routing for incoming access
+# (We fetch the VPN's internal IP directly to avoid any Docker DNS resolution bugs on your host)
+GLUETUN_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' gluetun)
 docker run -d \
   --name m3ulisterr-proxy \
   --network=m3ulisterr_net \
   -p 8080:80 \
-  caddy:alpine caddy reverse-proxy --from :80 --to gluetun:80
+  caddy:alpine caddy reverse-proxy --from :80 --to $GLUETUN_IP:80
 ```
 
 ### 🛠️ Schnellstart (Mit Repository)

@@ -2562,12 +2562,58 @@ function torrentSites($movieId, $imdbId, $title, $year = null)
     }
 }
 
+// video_proxy.php wraps an upstream link (an AIOStreams /playback/ CDN URL, a
+// scraper's direct link, ...) that can go dead on its own, independently of
+// anything on this server - confirmed directly: a cached AIOStreams link
+// started returning a genuine 502 "Upstream link could not be streamed" from
+// elfhosted while checkLinkStatusCode() still unconditionally trusted any
+// video_proxy.php URL, so a cache-hit kept 301-redirecting a real player
+// straight to the dead link twice in a row instead of falling back to a
+// fresh resolve. video_proxy.php's own 'auto' mode already understands a
+// HEAD request (see $isHead in proxyStreamUpstream()/proxyResolveFinalUrl())
+// and resolves + probes the real upstream link before answering, without
+// sending back any video bytes - a real HEAD request against our own
+// video_proxy.php is a cheap, accurate stand-in for actually trying to play
+// the link, reusing that exact logic instead of duplicating it here.
+function checkVideoProxyUpstreamAlive($proxyUrl) {
+    $absoluteUrl = (stripos($proxyUrl, 'http://') === 0 || stripos($proxyUrl, 'https://') === 0)
+        ? $proxyUrl
+        : locateBaseURL() . $proxyUrl;
+
+    $ch = curl_init($absoluteUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_NOBODY, true);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'HEAD');
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+
+    $response = curl_exec($ch);
+    $httpStatus = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($response === false || $httpStatus >= 400) {
+        if ($GLOBALS['DEBUG']) {
+            echo 'Link Checker - video_proxy.php upstream check returned status ' . $httpStatus . '.</br></br>';
+        }
+        return false;
+    }
+
+    return true;
+}
+
 function checkLinkStatusCode($url, $verify = false)
 {
 	global $HTTP_PROXY, $USE_HTTP_PROXY;
-		
-    // Existing code for checking 'video_proxy.php' and 'hls_proxy.php'
-    if (strpos($url, 'video_proxy.php') !== false || strpos($url, 'hls_proxy.php') !== false || strpos($url, 'subtitle_track_playlist.m3u8') !== false) {
+
+    if (strpos($url, 'video_proxy.php') !== false) {
+        return checkVideoProxyUpstreamAlive($url);
+    }
+
+    // hls_proxy.php and the subtitle playlist endpoint aren't covered by this
+    // fix - still trusted as before.
+    if (strpos($url, 'hls_proxy.php') !== false || strpos($url, 'subtitle_track_playlist.m3u8') !== false) {
         return true;
     }
 	

@@ -17,13 +17,13 @@ services:
     restart: unless-stopped
 
   php-app:
-    build: .
+    image: ghcr.io/cyberpoison/m3ulisterr:latest
     container_name: tmdb-vod-php
     network_mode: "service:gluetun" # Route all traffic through the Gluetun VPN
     depends_on:
       - gluetun
     volumes:
-      - .:/var/www/html
+      - ./config.php:/var/www/html/config.php
       - sessions:/var/www/html/sessions
       - videos:/var/www/html/videos
       - channels:/var/www/html/channels

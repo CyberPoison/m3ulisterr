@@ -1,50 +1,40 @@
 version: '3.8'
 
 services:
+  # Gluetun VPN Container to bypass hosting company IP blocks on debrid services
+  # See https://github.com/qdm12/gluetun-wiki/tree/main/setup for VPN providers
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8080:80"  # Expose m3ulisterr through the VPN's network stack
+    environment:
+      - VPN_SERVICE_PROVIDER=custom # Change to your provider (e.g., wireguard, openvpn, mullvad)
+    restart: unless-stopped
+
   php-app:
     build: .
     container_name: tmdb-vod-php
-    ports:
-      - "8080:80"
+    network_mode: "service:gluetun" # Route all traffic through the Gluetun VPN
+    depends_on:
+      - gluetun
     volumes:
       - .:/var/www/html
       - sessions:/var/www/html/sessions
       - videos:/var/www/html/videos
       - channels:/var/www/html/channels
-      # Durable M3uListerr data (SQLite DB, event log, install secret). MUST be
-      # a persistent volume: it is the source of truth for resolved/prewarmed
-      # content and the dashboard, and unlike cache.json it must survive deploys.
       - m3ulisterr_data:/data
     environment:
       - HEADLESSVIDX_ADDRESS=xxxx.xxxx.xxxx:xxx
       - PHP_MEMORY_LIMIT=1024M
-      # Where the durable SQLite store + event log live (mounted volume below).
       - M3U_DATA_DIR=/data
-      # ── Prewarmer (optional) ─────────────────────────────────────────
-      # Resolves titles ahead of time so the FIRST viewer play is an instant
-      # cache hit instead of a ~13s AIOStreams round-trip. DISABLED by default.
-      # WARNING: each resolve pulls ~10MB through your debrid provider, so a
-      # large list can exhaust its fair-use allowance. Keep the limit curated.
       - PREWARM_ENABLED=false
-      # Cron schedule (run a little more often than $expirationHours in
-      # config.php, default 3h, so warmed titles never go cold):
       - "PREWARM_SCHEDULE=0 */2 * * *"
-      # Arguments passed to prewarm.php (see that file's header for all options).
-      # --expiring=150 re-warms durable-cache entries that have already expired
-      # or will within the next 150min - comfortably more than the 120min gap
-      # between runs above, so a previously-watched/prewarmed title never goes
-      # cold between cron ticks. --playlist=top still seeds newly popular
-      # titles nobody has resolved yet; --expiring runs first and takes
-      # priority under --limit (proven demand beats speculative seeding).
       - "PREWARM_ARGS=--expiring=150 --playlist=top --limit=400 --accounts=Unlimited,UnlimitedFR --base=http://127.0.0.1 --workers=8"
-    # /dev/shm backs the HLS segment/init RAM cache (see getRamCacheDir() in
-    # hls_shared.php) - Docker's default is only 64MB, which can't even hold
-    # one segment of a high-bitrate remux (a 90Mbps title needs ~120MB just
-    # for its own cache budget). This is a ceiling, not a reservation - tmpfs
-    # only uses actual host RAM for what's currently written into it, and the
-    # application enforces its own smaller per-title budget well under this,
-    # so raising it doesn't pre-commit memory. Increase further if you expect
-    # many concurrent high-bitrate streams; lower it if host RAM is tight.
     shm_size: '1gb'
     restart: unless-stopped
 

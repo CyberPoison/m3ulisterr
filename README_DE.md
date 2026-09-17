@@ -135,9 +135,20 @@ Führen Sie das öffentliche Image ganz einfach aus, ohne das Repository klonen 
 ```bash
 mkdir -p m3ulisterr_data
 touch config.php
+# 1. Start the Gluetun VPN container to bypass Debrid IP blocks
+# (See [Gluetun VPN](https://github.com/qdm12/gluetun) for provider configurations)
+docker run -d \
+  --name gluetun \
+  --cap-add=NET_ADMIN \
+  --device=/dev/net/tun:/dev/net/tun \
+  -p 8080:80 \
+  -e VPN_SERVICE_PROVIDER=custom \
+  qmcgaw/gluetun
+
+# 2. Start m3ulisterr routed through the Gluetun VPN network
 docker run -d \
   --name m3ulisterr \
-  -p 8080:80 \
+  --network=container:gluetun \
   -v $(pwd)/m3ulisterr_data:/var/www/html/m3ulisterr_data \
   -v $(pwd)/config.php:/var/www/html/config.php \
   -e HEADLESSVIDX_ADDRESS=localhost:3202 \

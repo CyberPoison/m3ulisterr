@@ -25,10 +25,15 @@ RUN docker-php-ext-configure gd --with-jpeg \
     && docker-php-ext-install curl gd xml zip opcache
 
 # Enable Apache mod_rewrite
-RUN a2enmod rewrite
+RUN a2enmod rewrite remoteip
 
 # Configure Apache to allow .htaccess overrides
 RUN sed -i '/<Directory \/var\/www\/>/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf
+
+# Configure Apache to trust X-Forwarded-For from internal Docker networks (e.g. Caddy proxy)
+RUN echo "RemoteIPHeader X-Forwarded-For\nRemoteIPInternalProxy 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16" > /etc/apache2/conf-available/remoteip.conf && \
+    a2enconf remoteip
+
 
 # Set Apache timeout for long-running scripts
 RUN echo "Timeout 3600" >> /etc/apache2/apache2.conf

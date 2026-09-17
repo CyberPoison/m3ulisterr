@@ -128,16 +128,20 @@ mkdir -p m3ulisterr_data
 touch config.php
 
 # Lancez le conteneur en arrière-plan
-# 1. Start the Gluetun VPN container to bypass Debrid IP blocks
+# 1. Create a custom Docker network for DNS resolution
+docker network create m3ulisterr_net
+
+# 2. Start the Gluetun VPN container to bypass Debrid IP blocks
 # (See [Gluetun VPN](https://github.com/qdm12/gluetun) for provider configurations)
 docker run -d \
   --name gluetun \
+  --network=m3ulisterr_net \
   --cap-add=NET_ADMIN \
   --device=/dev/net/tun:/dev/net/tun \
   -e VPN_SERVICE_PROVIDER=custom \
   qmcgaw/gluetun
 
-# 2. Start m3ulisterr routed through the Gluetun VPN network
+# 3. Start m3ulisterr routed through the Gluetun VPN network
 docker run -d \
   --name m3ulisterr \
   --network=container:gluetun \
@@ -146,11 +150,11 @@ docker run -d \
   -e HEADLESSVIDX_ADDRESS=localhost:3202 \
   ghcr.io/cyberpoison/m3ulisterr:latest
 
-# 3. Start a lightweight proxy to fix VPN asymmetric routing for incoming access
+# 4. Start a lightweight proxy to fix VPN asymmetric routing for incoming access
 docker run -d \
   --name m3ulisterr-proxy \
+  --network=m3ulisterr_net \
   -p 8080:80 \
-  --link gluetun:gluetun \
   caddy:alpine caddy reverse-proxy --from :80 --to gluetun:80
 ```
 

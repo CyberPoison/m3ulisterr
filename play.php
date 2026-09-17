@@ -3845,6 +3845,13 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         return candidateQualityRank($a['resolution'], $a['codec'], $scheme)
             <=> candidateQualityRank($b['resolution'], $b['codec'], $scheme);
     });
+    if ($DEBUG) {
+        echo "DIAGNOSTIC (temporary): preferredService=" . htmlspecialchars(var_export($preferredService, true)) . " top 6 after sort: ";
+        foreach (array_slice($candidates, 0, 6) as $i => $dc) {
+            echo "#{$i}[debrid={$dc['debrid']},svc=" . aioCandidateService($dc) . ",tier={$dc['tier']},cached=" . ($dc['cached'] ? '1' : '0') . ",res={$dc['resolution']},codec={$dc['codec']}] ";
+        }
+        echo "</br></br>";
+    }
 
     // Confirmed directly: a popular title can match 50+ candidates on
     // language alone (Dune: Part Two matched 53 of 187 total streams on

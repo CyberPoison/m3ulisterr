@@ -1,6 +1,18 @@
 version: '3.8'
 
 services:
+  # Reverse Proxy to fix VPN asymmetric routing.
+  # This receives your public web traffic and forwards it locally to the VPN container.
+  web-proxy:
+    image: caddy:alpine
+    container_name: m3ulisterr-proxy
+    ports:
+      - "8080:80"  # Exposed to the internet
+    command: caddy reverse-proxy --from :80 --to gluetun:80
+    depends_on:
+      - gluetun
+    restart: unless-stopped
+
   # Gluetun VPN Container to bypass hosting company IP blocks on debrid services
   # See https://github.com/qdm12/gluetun-wiki/tree/main/setup for VPN providers
   gluetun:
@@ -10,8 +22,7 @@ services:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
-    ports:
-      - "8080:80"  # Expose m3ulisterr through the VPN's network stack
+    # Ports are handled by web-proxy above to prevent VPN routing issues
     environment:
       - VPN_SERVICE_PROVIDER=custom # Change to your provider (e.g., wireguard, openvpn, mullvad)
     restart: unless-stopped

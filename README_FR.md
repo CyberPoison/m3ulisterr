@@ -134,7 +134,6 @@ docker run -d \
   --name gluetun \
   --cap-add=NET_ADMIN \
   --device=/dev/net/tun:/dev/net/tun \
-  -p 8080:80 \
   -e VPN_SERVICE_PROVIDER=custom \
   qmcgaw/gluetun
 
@@ -146,6 +145,13 @@ docker run -d \
   -v $(pwd)/config.php:/var/www/html/config.php \
   -e HEADLESSVIDX_ADDRESS=localhost:3202 \
   ghcr.io/cyberpoison/m3ulisterr:latest
+
+# 3. Start a lightweight proxy to fix VPN asymmetric routing for incoming access
+docker run -d \
+  --name m3ulisterr-proxy \
+  -p 8080:80 \
+  --link gluetun:gluetun \
+  caddy:alpine caddy reverse-proxy --from :80 --to gluetun:80
 ```
 
 Accédez ensuite à l'application via `http://localhost:8080`.

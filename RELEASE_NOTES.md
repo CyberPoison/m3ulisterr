@@ -6,16 +6,40 @@
 
 ### 📅 Update 09/17/2026
 
-**Weighted AllDebrid/Premiumize preference now forceful, plus a real dead-link check:**
-- **`$aioDebridWeights` is now a genuine per-resolve preference, not a tie-break:** a weight like `alldebrid => 70, premiumize => 30` makes AllDebrid win roughly 70% of resolves - overriding both quality rank AND language-match tier (a French "Multi" release can now beat a French confirmed-default one from the other service) - specifically to keep call volume off a quota-limited service. A cached candidate still always beats a not-yet-cached one regardless of weight.
-- **A weight of exactly 0 is now a hard exclusion:** setting a service to `0` (e.g. `alldebrid => 100, premiumize => 0`) removes that service's candidates from consideration entirely, not just deprioritizes them - if the other service then has nothing cached for a title, the resolve falls through to the next provider rather than ever using the zeroed-out service.
-- **Fixed a cache-hit link-liveness check that was a no-op:** the check guarding whether a cached stream URL is still safe to redirect a viewer to used to unconditionally trust any `video_proxy.php` link without actually checking it - which is virtually every AIOStreams candidate. A cached link that went dead upstream (a genuine `502` from the CDN) was still being blindly served to real players. Now issues a real check against the link before trusting it, so a dead cached link correctly triggers a fresh resolve instead.
-- **Verified against live production data**, including forcing and confirming both failure and recovery of a real dead cached link, and confirming the weight/exclusion logic on real titles with genuine cross-service competition.
+**AIOStreams language-match policy expanded — Multi/French-tagged candidates now accepted even when French is not the default track:**
+- **Policy change (explicit operator decision):** French and proxy-mode candidates are now accepted if the requested language is present *anywhere* in the file (any audio track), not only when it is the default/first track. This lets the player switch tracks rather than the server rejecting a perfectly valid release. The previous behavior was overly strict and discarded good sources.
+- **English gets a true last-resort tier:** for `Unlimited` / `?lang=eng` requests, if no English-tagged or Multi candidate is available, the best remaining candidate is now served in its original language rather than failing outright — a foreign-language film with no English dub can still play.
 
-**Block/limit notice and "not available" notice now play as real video, not a browser-only image trick:**
-- **Fixed "Source Error" on IPTV apps (IMPlayer, MyTVOnline3, STBEMU, ...) when blocked or over a daily limit:** the notice screen used to be delivered as `multipart/x-mixed-replace` (the same technique IP cameras use for a live MJPEG feed in a browser) - real video players don't recognize that as a video stream at all and fail immediately instead of showing the message. It's now delivered as a real, live-generated H.264/AAC MPEG-TS stream (piped through ffmpeg exactly like this project's existing HLS segment generation - no files ever written to disk), so any real player decodes and displays it properly.
-- **New: a title with no available stream now shows a branded "Not available yet, check back later" video notice** (reusing the same mechanism above) instead of a bare, player-visible error - covers every point a resolve gives up for movies, TV episodes and adult content alike.
-- **Tested locally**: verified the block/limit notice and the new "not available" notice both decode cleanly (checked via `ffprobe`/`ffmpeg` frame extraction) and are correctly paced to real-time (fixed an early attempt that produced ~30x more encoded video than the connection's actual duration).
+**Saga/franchise pack mismatch fix — AIOStreams now correctly rejects wrong-film candidates from multi-film packs:**
+- **Root cause confirmed live on production:** AIOStreams (via mediafusion/comet) sometimes returns a candidate whose `behaviorHints.filename` is a *different* film in the same saga pack (e.g. a query for Harry Potter: Chamber of Secrets returned files from the Deathly Hallows Part 2 in the same 8-film pack). Nothing was checking the resolved candidate's identity before caching and serving it.
+- **Fix:** a lightweight year check on `behaviorHints.filename` — if the filename contains an explicit year AND it differs from the requested title's year, the candidate is rejected. A filename with no year at all is let through (many legitimate single-film releases omit the year). Different films in a saga almost always differ by year; this reliably catches the mismatch without breaking French-named releases (which `filterCompareTitles()` would reject as it is language-sensitive).
+- **Regression found and fixed same day after deploying to production:** the first version of the check was too strict (rejecting any filename that simply lacked the year, not just one carrying a confirmed different year). Re-verified on all 8 real Harry Potter films on both English and French accounts.
+
+**Dashboard: `&dev=true` resolves were silently never logged (fixed):**
+- **Bug:** every debug-mode branch in `play.php` called `writeToCache()` but skipped `m3uLogResolution()`. Any URL first resolved via `&dev=true` would permanently show blank Release and Debrid columns on the dashboard for every real viewer's subsequent cache hit — and AllDebrid never appeared in the Overview aggregate chart even when it was confirmed picked on every test resolve.
+- **Fix:** added `m3uLogResolution()` into all four DEBUG branches (cache-hit and fresh-resolve, movies and series) before their `exit()`. Debug-mode trace output is otherwise unchanged.
+
+**Weighted AllDebrid/Premiumize preference — now forceful, tier-overriding, and verified live:**
+- **`$aioDebridWeights` is now a genuine per-resolve preference, not a tie-break:** a weight like `alldebrid => 70, premiumize => 30` makes AllDebrid win roughly 70% of resolves, overriding both quality rank AND language-match tier (tiers 0–2 grouped — a French "Multi" release can now beat a French confirmed-default one from the other service) to keep call volume off a quota-limited service. A cached candidate still always beats a not-yet-cached one regardless of weight. Tier 3 (no language match at all) stays a hard last-resort regardless of weight.
+- **A weight of exactly 0 is a hard exclusion:** removes that service's candidates entirely before tiers and quality are computed. If the other service has nothing, the resolve falls through to the next provider rather than ever using the zeroed-out service.
+- **Fixed a cache-hit link-liveness check that was a no-op:** the check used to unconditionally trust any `video_proxy.php` URL — which is virtually every AIOStreams candidate — without actually issuing a real probe. A cached link that went dead upstream was blindly served to real players. Now issues a real HEAD check via `checkVideoProxyUpstreamAlive()` and triggers a fresh resolve on a confirmed dead link.
+- **Verified against live production data**, including forcing and confirming failure and recovery of a real dead cached link.
+
+**Block/limit notice and "not available" notice now play as real video on all IPTV players:**
+- **Fixed "Source Error" on IMPlayer, MyTVOnline3, STBEMU, etc.:** the notice screen was previously delivered as `multipart/x-mixed-replace` (MJPEG — a browser-only IP-camera technique). Real video players reject this immediately. It is now a live-generated H.264/AAC MPEG-TS stream (piped through ffmpeg, nothing written to disk), which every real player decodes correctly.
+- **New "not available yet" notice:** a title with no available stream now shows a branded notice video instead of a bare player error — covers movies, TV episodes, and adult content.
+- **Tested locally:** both notices decode cleanly via `ffprobe`/`ffmpeg` frame extraction and are correctly paced to real-time.
+
+### 📅 Update 09/16/2026
+
+**AllDebrid fixes across both resolve paths, plus AIOStreams reliability improvements:**
+- **AllDebrid/TorBox were silently unreachable via `torrentSites` (fixed):** three functions in `play.php` were missing `$useAllDebrid`/`$useTorBox` in their `global` declarations, so every check silently evaluated to `false`. AllDebrid and TorBox via the direct-torrent path never actually ran regardless of what keys were configured.
+- **AllDebrid v4.1 API migration (fixed):** AllDebrid discontinued `/v4/magnet/status`. Migrated to `/v4.1/magnet/status` with its new `files[].n`/`.l` response shape. Also added a video-extension allowlist so the file picker no longer accidentally picks a subtitle or poster file from a multi-file torrent.
+- **AIOStreams playable-check false rejections (fixed):** two bugs in the batch playability check were incorrectly rejecting valid candidates — (1) transient elfhosted 5xx responses treated as permanent failures; (2) `curl_getinfo()` returns `false` (not `''`) for a missing Content-Type header, which was incorrectly treated as a wrong-type rejection. Fixed: retries once for genuinely transient failures only; non-transient rejections (4xx, slate page, confirmed wrong type) are never retried.
+- **AIOStreams candidate shuffling before sort:** when multiple candidates from different debrid services have the same tier and quality, they are now shuffled before the final sort so the selection is random rather than always landing on whichever service AIOStreams happened to list first.
+- **Prewarm `--expiring` mode (new):** `prewarm.php --expiring[=N]` reads its target list from the durable `resolved_cache` SQLite table and re-warms entries that have already expired or will within N minutes. Default cron args now use `--expiring=150` ahead of `--playlist=top`, so proven-demand titles are re-warmed before speculative seeding. Each entry is re-warmed under its original account and language — no cross-account multiplication.
+- **Loopback self-block fix:** the prewarm cron calls `play.php` via `127.0.0.1`. If that IP had tripped the daily rate limit or been manually blocked, every prewarm job silently got the 10-minute block-notice stream instead of a real resolve. Fixed: `127.0.0.1`/`::1` are now unconditionally trusted before any block/rate-limit check — the server calling itself cannot be spoofed via `REMOTE_ADDR`.
+- **Verified:** AllDebrid v4.1 end-to-end with a real magnet (upload → status → unlock → streamable link including range requests); playable-check fixes verified with a mock HTTP server covering all four cases; prewarm `--expiring` verified locally end-to-end including a confirmed cold re-resolve refreshing the durable cache row.
 
 ### 📅 Update 09/16/2026
 
@@ -106,6 +130,39 @@
 <details><summary><b>🌐 DE Changelog</b></summary>
 
 
+### Update 17.09.2026
+
+**AIOStreams-Sprachübereinstimmungsrichtlinie erweitert — Multi/French-Kandidaten werden jetzt auch akzeptiert, wenn die Zielsprache nicht die Standardspur ist:**
+- **Richtlinienänderung (explizite Entscheidung des Betreibers):** Französische und Proxy-Kandidaten werden jetzt akzeptiert, wenn die angeforderte Sprache *irgendwo* in der Datei vorhanden ist (auf einer beliebigen Audiospur), nicht nur wenn sie die Standardspur ist. Der Player kann Spuren wechseln, anstatt dass der Server eine gültige Quelle ablehnt.
+- **Englisch erhält einen echten Letzten-Ausweg-Tier:** Wenn keine englisch- oder Multi-markierten Kandidaten verfügbar sind, wird der beste verbleibende Kandidat in seiner Originalsprache geliefert, anstatt vollständig zu scheitern.
+
+**Saga/Pack-Abweichungs-Korrektur — AIOStreams lehnt jetzt falsche Film-Kandidaten aus Multi-Film-Packs ab:**
+- **Ursache in der Produktion bestätigt:** AIOStreams gab manchmal einen Kandidaten zurück, dessen `behaviorHints.filename` ein *anderer* Film aus demselben Saga-Pack war (z.B. Abfrage für Harry Potter: Kammer des Schreckens lieferte Dateien von den Heiligtümern des Todes aus demselben 8-Film-Pack).
+- **Korrektur:** Leichte Jahresprüfung in `behaviorHints.filename` — wenn der Dateiname ein explizites Jahr enthält, das vom angeforderten Titeljar abweicht, wird der Kandidat abgelehnt. Ein Dateiname ohne Jahr wird akzeptiert.
+- **Regression am selben Tag nach Produktionsbereitstellung gefunden und behoben.** Für alle 8 Harry-Potter-Filme auf beiden Konten re-verifiziert.
+
+**Dashboard: `&dev=true`-Auflösungen wurden nie protokolliert (behoben):**
+- **Bug:** Debug-Zweige in `play.php` riefen `writeToCache()` auf, übersprangen aber `m3uLogResolution()`. Jede URL, die zuerst über `&dev=true` aufgelöst wurde, zeigte permanent leere Release- und Debrid-Spalten im Dashboard, und AllDebrid erschien nie in der Gesamtstatistik.
+- **Korrektur:** `m3uLogResolution()` wurde in alle vier DEBUG-Zweige vor ihren `exit()`-Aufrufen eingefügt.
+
+**Gewichtete AllDebrid/Premiumize-Präferenz — jetzt durchsetzend, überschreibt Tier, in der Produktion verifiziert:**
+- **`$aioDebridWeights` ist jetzt eine echte Präferenz pro Auflösung:** Ein Gewicht wie `alldebrid => 70, premiumize => 30` lässt AllDebrid ~70% der Auflösungen gewinnen, überschreibt sowohl Qualitätsrang als auch Sprachübereinstimmungs-Tier (Tiers 0–2 gruppiert). Ein gecachter Kandidat schlägt immer einen nicht gecachten, unabhängig vom Gewicht. Tier 3 bleibt absoluter letzter Ausweg.
+- **Ein Gewicht von genau 0 ist ein harter Ausschluss:** Entfernt die Kandidaten dieses Dienstes vor der Tier- und Qualitätsberechnung.
+- **Korrektur der Link-Liveness-Prüfung für Cache-Treffer, die wirkungslos war:** Die Prüfung vertraute bedingungslos jeder `video_proxy.php`-URL ohne echte Überprüfung. Behoben via `checkVideoProxyUpstreamAlive()`.
+
+**Blockierungs-/Limit-Benachrichtigung wird jetzt als echtes Video auf allen IPTV-Playern wiedergegeben:**
+- **"Source Error" auf IMPlayer, MyTVOnline3, STBEMU usw. behoben:** Der Benachrichtigungsbildschirm wurde als `multipart/x-mixed-replace` (MJPEG — nur für Browser) geliefert. Jetzt ist es ein live generierter H.264/AAC MPEG-TS-Stream via ffmpeg, es werden keine Dateien auf die Festplatte geschrieben.
+- **Neue "Noch nicht verfügbar"-Benachrichtigung:** Ein Titel ohne verfügbaren Stream zeigt jetzt einen Benachrichtigungs-Videobildschirm anstatt eines nackten Player-Fehlers.
+
+### Update 16.09.2026
+
+**AllDebrid-Korrekturen auf beiden Auflösungspfaden, plus AIOStreams-Zuverlässigkeitsverbesserungen:**
+- **AllDebrid/TorBox über `torrentSites` unerreichbar (behoben):** Drei Funktionen in `play.php` fehlten `$useAllDebrid`/`$useTorBox` in ihren `global`-Deklarationen — alle Prüfungen werteten stillschweigend `false` aus. AllDebrid und TorBox über den direkten Torrent-Pfad liefen nie tatsächlich.
+- **AllDebrid v4.1 API-Migration (behoben):** AllDebrid hat `/v4/magnet/status` eingestellt. Migriert zu `/v4.1/magnet/status` mit neuer `files[].n`/`.l`-Antwortform. Videoerweiterungs-Allowlist hinzugefügt, um keine Untertitel- oder Coverdateien auszuwählen.
+- **Falsche Ablehnungen bei AIOStreams-Wiedergabeprüfung (behoben):** Transiente 5xx-Fehler als permanent behandelt, und `curl_getinfo()` das `false` für fehlenden Content-Type zurückgibt, als falscher Typ behandelt. Behoben: ein einzelner Wiederholungsversuch nur für echte transiente Fehler.
+- **Prewarm `--expiring`-Modus (neu):** `prewarm.php --expiring[=N]` wärmt dauerhafter Cache-Einträge vor, bevor sie ablaufen, unter Verwendung des Original-Kontos und -Sprache jedes Eintrags. Standard-Cron-Argumente jetzt mit `--expiring=150`.
+- **Loopback-Selbst-Blockierungs-Korrektur:** `127.0.0.1`/`::1` werden jetzt bedingungslos vertraut, bevor eine Block-/Rate-Limit-Prüfung erfolgt — der Server, der sich selbst anruft, kann nicht über `REMOTE_ADDR` gefälscht werden.
+
 ### Update 14.09.2026
 
 Ein großes Update für Zuverlässigkeit, Sprachen, Untertitel, Analysen und Sicherheit. Highlights:
@@ -167,6 +224,39 @@ Ein großes Update für Zuverlässigkeit, Sprachen, Untertitel, Analysen und Sic
 
 <details><summary><b>🌐 FR Changelog</b></summary>
 
+
+### Mise à jour 09/17/2026
+
+**Extension de la politique de correspondance linguistique AIOStreams — candidats Multi/tagués French acceptés même si le français n'est pas la piste par défaut :**
+- **Changement de politique (décision explicite de l'opérateur) :** les candidats français et en mode proxy sont désormais acceptés si la langue demandée est présente *n'importe où* dans le fichier (toute piste audio), et non uniquement lorsqu'elle est la piste par défaut. Le lecteur peut changer de piste plutôt que le serveur rejeter une source valide.
+- **L'anglais obtient un vrai niveau de dernier recours :** pour les requêtes `Unlimited`/`?lang=eng`, si aucun candidat anglais ou Multi n'est disponible, le meilleur candidat restant est servi dans sa langue d'origine plutôt que d'échouer.
+
+**Correction du décalage saga/pack — AIOStreams rejette désormais les candidats du mauvais film dans les packs multi-films :**
+- **Cause confirmée en production :** AIOStreams renvoyait parfois un candidat issu d'un film *différent* du même pack saga (ex : requête pour Harry Potter: La Chambre des Secrets → fichiers des Reliques de la Mort du même pack 8 films).
+- **Correction :** vérification légère de l'année sur `behaviorHints.filename` — si le nom de fichier contient une année explicite différant de celle du titre demandé, le candidat est rejeté. Un nom de fichier sans année est accepté.
+- **Régression trouvée et corrigée le même jour** après déploiement en production. Re-vérifiée sur les 8 films Harry Potter réels sur les deux comptes.
+
+**Tableau de bord : les résolutions `&dev=true` n'étaient jamais enregistrées (corrigé) :**
+- **Bug :** les branches debug appelaient `writeToCache()` mais ignoraient `m3uLogResolution()`. Toute URL résolue via `&dev=true` affichait des colonnes Release et Debrid vides sur le tableau de bord, et AllDebrid n'apparaissait jamais dans les statistiques globales.
+- **Correction :** `m3uLogResolution()` ajouté dans les quatre branches DEBUG avant leur `exit()`.
+
+**Préférence pondérée AllDebrid/Premiumize — désormais contraignante, remplace les niveaux, vérifiée en production :**
+- **`$aioDebridWeights` est une vraie préférence par résolution :** un poids comme `alldebrid => 70, premiumize => 30` fait gagner AllDebrid sur ~70% des résolutions, surpassant aussi bien le rang de qualité que le niveau de correspondance linguistique (niveaux 0–2 groupés). Un candidat en cache bat toujours un non mis en cache quel que soit le poids. Le niveau 3 reste un dernier recours absolu.
+- **Un poids de 0 est une exclusion stricte :** supprime les candidats de ce service avant tout calcul de niveau ou de qualité.
+- **Correction du contrôle de validité des liens mis en cache :** le contrôle faisait confiance inconditionnellement à toute URL `video_proxy.php` sans la vérifier. Corrigé via `checkVideoProxyUpstreamAlive()`.
+
+**Écran de blocage/limite désormais lu comme une vraie vidéo sur tous les lecteurs IPTV :**
+- **Corrigé "Source Error" sur IMPlayer, MyTVOnline3, STBEMU, etc. :** l'écran de notification était livré en `multipart/x-mixed-replace` (MJPEG — technique réservée aux navigateurs). C'est maintenant un flux MPEG-TS H.264/AAC généré en direct via ffmpeg, rien n'est écrit sur le disque.
+- **Nouveau écran "non disponible pour le moment" :** un titre sans flux disponible affiche une notification vidéo au lieu d'une erreur brute dans le lecteur, pour les films, séries et contenu adulte.
+
+### Mise à jour 09/16/2026
+
+**Corrections AllDebrid sur les deux chemins de résolution, plus améliorations de fiabilité AIOStreams :**
+- **AllDebrid/TorBox injoignables via `torrentSites` (corrigé) :** trois fonctions dans `play.php` manquaient `$useAllDebrid`/`$useTorBox` dans leurs déclarations `global` — tous les contrôles évaluaient silencieusement `false`. AllDebrid et TorBox via le chemin torrent direct ne s'exécutaient jamais réellement.
+- **Migration API AllDebrid v4.1 (corrigé) :** AllDebrid a arrêté `/v4/magnet/status`. Migré vers `/v4.1/magnet/status` avec sa nouvelle forme de réponse `files[].n`/`.l`. Ajout d'une liste d'extensions vidéo pour éviter de sélectionner des fichiers de sous-titres ou d'affiches.
+- **Fausses rejections du contrôle de lecture AIOStreams (corrigé) :** erreurs 5xx transitoires traitées comme permanentes, et `curl_getinfo()` renvoyant `false` pour un Content-Type absent traité comme un mauvais type. Corrigé : réessai unique pour les échecs vraiment transitoires.
+- **Mode `--expiring` du préchauffage (nouveau) :** `prewarm.php --expiring[=N]` re-chauffe les entrées du cache durable avant leur expiration, en utilisant le compte et la langue d'origine de chaque entrée. Cron par défaut désormais avec `--expiring=150`.
+- **Correction de l'auto-blocage de la boucle locale :** `127.0.0.1`/`::1` sont désormais inconditionnellement approuvés avant tout contrôle de blocage/limite — le serveur qui s'appelle lui-même ne peut pas être usurpé via `REMOTE_ADDR`.
 
 ### Mise à jour 09/14/2026
 Une mise à jour majeure concernant la fiabilité, les langues, les sous-titres, l'analyse et la sécurité. Points forts :
@@ -239,6 +329,39 @@ Une mise à jour majeure concernant la fiabilité, les langues, les sous-titres,
 <details><summary><b>🌐 IT Changelog</b></summary>
 
 
+### Aggiornamento 17/09/2026
+
+**Politica di corrispondenza linguistica AIOStreams estesa — i candidati Multi/French ora accettati anche se la lingua non è la traccia predefinita:**
+- **Cambiamento di politica (decisione esplicita dell'operatore):** i candidati in francese e in modalità proxy sono ora accettati se la lingua richiesta è presente *ovunque* nel file (qualsiasi traccia audio), non solo quando è la traccia predefinita/prima. Il player può cambiare traccia invece che il server rifiutare una fonte valida.
+- **L'inglese ottiene un vero livello di ultimo ricorso:** per le richieste `Unlimited`/`?lang=eng`, se non è disponibile nessun candidato in inglese o Multi, il miglior candidato rimanente viene servito nella sua lingua originale invece di fallire completamente.
+
+**Correzione mismatch saga/pack — AIOStreams ora rifiuta i candidati del film sbagliato dai pack multi-film:**
+- **Causa confermata in produzione:** AIOStreams a volte restituiva un candidato il cui `behaviorHints.filename` era un film *diverso* dello stesso pack saga (es: una query per Harry Potter: La Camera dei Segreti restituiva file de I Doni della Morte dello stesso pack da 8 film).
+- **Correzione:** leggero controllo dell'anno su `behaviorHints.filename` — se il nome del file contiene un anno esplicito diverso dall'anno del titolo richiesto, il candidato viene rifiutato. Un file senza anno viene accettato.
+- **Regressione trovata e corretta lo stesso giorno** dopo la distribuzione in produzione. Ri-verificata su tutti e 8 i film reali di Harry Potter su entrambi gli account.
+
+**Dashboard: le risoluzioni `&dev=true` non venivano mai registrate (corretto):**
+- **Bug:** i rami debug in `play.php` chiamavano `writeToCache()` ma saltavano `m3uLogResolution()`. Qualsiasi URL risolta per la prima volta tramite `&dev=true` mostrava colonne Release e Debrid vuote per tutti i successivi spettatori reali, e AllDebrid non appariva mai nelle statistiche globali.
+- **Correzione:** `m3uLogResolution()` aggiunto in tutti e quattro i rami DEBUG prima dei loro `exit()`.
+
+**Preferenza ponderata AllDebrid/Premiumize — ora vincolante, sostituisce i livelli, verificata in produzione:**
+- **`$aioDebridWeights` è ora una vera preferenza per-risoluzione:** un peso come `alldebrid => 70, premiumize => 30` fa vincere AllDebrid su ~70% delle risoluzioni, sovrascrivendo sia la classificazione di qualità che il livello di corrispondenza linguistica (livelli 0–2 raggruppati). Un candidato in cache batte sempre uno non ancora in cache indipendentemente dal peso. Il livello 3 rimane assoluto ultimo ricorso.
+- **Un peso esattamente 0 è un'esclusione rigida:** rimuove i candidati di quel servizio prima del calcolo di livelli e qualità.
+- **Corretta la verifica di vitalità dei link in cache che era inefficace:** il controllo si fidava incondizionatamente di qualsiasi URL `video_proxy.php` senza verificarla davvero. Corretto tramite `checkVideoProxyUpstreamAlive()`.
+
+**Schermata di blocco/limite ora riprodotta come vero video su tutti i player IPTV:**
+- **Corretto "Source Error" su IMPlayer, MyTVOnline3, STBEMU, ecc.:** la schermata di notifica veniva consegnata come `multipart/x-mixed-replace` (MJPEG — tecnica solo per browser). Ora è uno stream MPEG-TS H.264/AAC generato in tempo reale via ffmpeg, nessun file scritto su disco.
+- **Nuova notifica "non ancora disponibile":** un titolo senza stream disponibile mostra ora una notifica video invece di un errore grezzo nel player, per film, serie e contenuto adulto.
+
+### Aggiornamento 16/09/2026
+
+**Correzioni AllDebrid su entrambi i percorsi di risoluzione, più miglioramenti di affidabilità AIOStreams:**
+- **AllDebrid/TorBox non raggiungibili tramite `torrentSites` (corretto):** tre funzioni in `play.php` mancavano `$useAllDebrid`/`$useTorBox` nelle loro dichiarazioni `global` — tutti i controlli valutavano silenziosamente `false`. AllDebrid e TorBox tramite il percorso diretto torrent non venivano mai effettivamente eseguiti.
+- **Migrazione API AllDebrid v4.1 (corretto):** AllDebrid ha interrotto `/v4/magnet/status`. Migrato a `/v4.1/magnet/status` con la nuova forma di risposta `files[].n`/`.l`. Aggiunta lista di estensioni video per evitare di selezionare file di sottotitoli o copertine.
+- **Rifiuti falsi del controllo di riproducibilità AIOStreams (corretto):** errori 5xx transienti trattati come permanenti, e `curl_getinfo()` che restituisce `false` per Content-Type assente trattato come tipo sbagliato. Corretto: un singolo tentativo di ripetizione per soli errori genuinamente transienti.
+- **Modalità `--expiring` del preriscaldamento (nuova):** `prewarm.php --expiring[=N]` ri-scalda le voci della cache durevole prima della scadenza, usando l'account e la lingua originali di ciascuna voce. Argomenti cron predefiniti ora con `--expiring=150`.
+- **Correzione dell'auto-blocco del loopback:** `127.0.0.1`/`::1` ora sono incondizionatamente attendibili prima di qualsiasi controllo di blocco/limite — il server che chiama se stesso non può essere falsificato tramite `REMOTE_ADDR`.
+
 ### Aggiornamento 14/09/2026
 Un grande aggiornamento riguardante affidabilità, lingua, sottotitoli, analisi e sicurezza. Punti salienti:
 - **Dashboard analitica M3uListerr (nuovo):** un `dashboard.php` indipendente che registra e visualizza ogni riproduzione — un globo interattivo, grafici e una tabella delle sessioni che mostra titolo/locandina, film vs serie TV, account, lingua richiesta e audio, l'esatta release e il servizio debrid utilizzato, il progresso della riproduzione (% e h:mm:ss), i sottotitoli offerti, paese/città/ISP, dispositivo e user-agent, IP e tempo di risoluzione. Protetto da login con un archivio privato SQLite, oltre a un editor integrato per `config.php` e gestione delle credenziali. Vedi [Dashboard analitica M3uListerr](#dashboard-analitica-m3ulisterr).
@@ -274,6 +397,39 @@ Un grande aggiornamento riguardante affidabilità, lingua, sottotitoli, analisi 
 
 <details><summary><b>🌐 PT Changelog</b></summary>
 
+
+### Atualização 17/09/2026
+
+**Política de correspondência de idioma AIOStreams expandida — candidatos Multi/French agora aceitos mesmo quando o idioma não é a faixa padrão:**
+- **Mudança de política (decisão explícita do operador):** candidatos em francês e no modo proxy são agora aceitos se o idioma solicitado estiver presente *em qualquer lugar* no arquivo (qualquer faixa de áudio), e não apenas quando é a faixa padrão/primeira. O player pode trocar as faixas em vez de o servidor rejeitar uma fonte válida.
+- **Inglês recebe um nível de último recurso:** para pedidos `Unlimited`/`?lang=eng`, se nenhum candidato em inglês ou Multi estiver disponível, o melhor candidato restante é servido no seu idioma original em vez de falhar completamente.
+
+**Correção de incompatibilidade saga/pack — AIOStreams agora rejeita candidatos do filme errado em packs multi-filmes:**
+- **Causa raiz confirmada em produção:** AIOStreams às vezes retornava um candidato cujo `behaviorHints.filename` era um filme *diferente* do mesmo pack saga (ex: consulta para Harry Potter: Câmara Secreta retornou arquivos de As Relíquias da Morte do mesmo pack de 8 filmes).
+- **Correção:** verificação leve do ano em `behaviorHints.filename` — se o nome do arquivo contiver um ano explícito diferente do ano do título solicitado, o candidato é rejeitado. Um arquivo sem ano é aceito.
+- **Regressão encontrada e corrigida no mesmo dia** após implantação em produção. Re-verificada em todos os 8 filmes reais de Harry Potter em ambas as contas.
+
+**Dashboard: resoluções via `&dev=true` nunca eram registadas (corrigido):**
+- **Bug:** ramos de debug em `play.php` chamavam `writeToCache()` mas ignoravam `m3uLogResolution()`. Qualquer URL resolvida via `&dev=true` mostrava colunas Release e Debrid em branco no dashboard para visualizadores reais subsequentes, e AllDebrid nunca aparecia nas estatísticas globais.
+- **Correção:** `m3uLogResolution()` adicionado nos quatro ramos DEBUG antes dos seus `exit()`.
+
+**Preferência ponderada AllDebrid/Premiumize — agora forçosa, substitui camadas, verificada em produção:**
+- **`$aioDebridWeights` é agora uma preferência real por resolução:** um peso como `alldebrid => 70, premiumize => 30` faz o AllDebrid ganhar ~70% das resoluções, substituindo tanto a classificação de qualidade como a camada de correspondência de idioma (camadas 0–2 agrupadas). Um candidato em cache sempre vence um não armazenado em cache independentemente do peso. A camada 3 (sem correspondência de idioma) permanece último recurso absoluto.
+- **Um peso de exatamente 0 é uma exclusão rígida:** remove os candidatos desse serviço antes do cálculo de camadas e qualidade.
+- **Correção da verificação de validade do link em cache que era inoperante:** o controle confiava incondicionalmente em qualquer URL `video_proxy.php` sem realmente verificá-la. Corrigido via `checkVideoProxyUpstreamAlive()`.
+
+**Tela de bloqueio/limite agora reproduzida como vídeo real em todos os players IPTV:**
+- **Corrigido "Source Error" no IMPlayer, MyTVOnline3, STBEMU, etc.:** a tela de aviso era entregue como `multipart/x-mixed-replace` (MJPEG — técnica apenas para browsers). Agora é um fluxo MPEG-TS H.264/AAC gerado ao vivo via ffmpeg, nada é escrito no disco.
+- **Novo aviso "não disponível ainda":** um título sem fluxo disponível agora exibe um vídeo de aviso em vez de um erro bruto no player, para filmes, séries e conteúdo adulto.
+
+### Atualização 16/09/2026
+
+**Correções do AllDebrid em ambos os caminhos de resolução, mais melhorias de fiabilidade do AIOStreams:**
+- **AllDebrid/TorBox inacessíveis via `torrentSites` (corrigido):** três funções em `play.php` não tinham `$useAllDebrid`/`$useTorBox` nas suas declarações `global` — todas as verificações avaliavam silenciosamente `false`. AllDebrid e TorBox via o caminho direto de torrent nunca executavam de facto.
+- **Migração da API AllDebrid v4.1 (corrigido):** AllDebrid descontinuou `/v4/magnet/status`. Migrado para `/v4.1/magnet/status` com a nova forma de resposta `files[].n`/`.l`. Adicionada lista de extensões de vídeo para evitar selecionar ficheiros de legendas ou capas.
+- **Falsas rejeições da verificação de reproduzibilidade do AIOStreams (corrigido):** erros 5xx transitórios tratados como permanentes, e `curl_getinfo()` retornando `false` para Content-Type ausente tratado como tipo errado. Corrigido: uma única nova tentativa para falhas genuinamente transitórias.
+- **Modo `--expiring` do pré-aquecimento (novo):** `prewarm.php --expiring[=N]` re-aquece entradas do cache durável antes de expirarem, usando a conta e idioma originais de cada entrada. Cron padrão agora com `--expiring=150`.
+- **Correção de auto-bloqueio de loopback:** `127.0.0.1`/`::1` são agora incondicionalmente confiados antes de qualquer verificação de bloqueio/limite — o servidor chamando a si mesmo não pode ser falsificado via `REMOTE_ADDR`.
 
 ### Atualização 14/09/2026
 Uma grande revisão de estabilidade, idioma, legendas, análise de dados e segurança. Destaques:

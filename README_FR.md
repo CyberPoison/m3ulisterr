@@ -214,6 +214,39 @@ Le projet inclut un workflow GitHub Actions `.github/workflows/deploy.yml` qui c
 
 ## 🔄 Mises à jour & Changelog
 
+### Mise à jour 09/17/2026
+
+**Extension de la politique de correspondance linguistique AIOStreams — candidats Multi/tagués French acceptés même si le français n'est pas la piste par défaut :**
+- **Changement de politique (décision explicite de l'opérateur) :** les candidats français et en mode proxy sont désormais acceptés si la langue demandée est présente *n'importe où* dans le fichier (toute piste audio), et non uniquement lorsqu'elle est la piste par défaut. Le lecteur peut changer de piste plutôt que le serveur rejeter une source valide.
+- **L'anglais obtient un vrai niveau de dernier recours :** pour les requêtes `Unlimited`/`?lang=eng`, si aucun candidat anglais ou Multi n'est disponible, le meilleur candidat restant est servi dans sa langue d'origine plutôt que d'échouer.
+
+**Correction du décalage saga/pack — AIOStreams rejette désormais les candidats du mauvais film dans les packs multi-films :**
+- **Cause confirmée en production :** AIOStreams renvoyait parfois un candidat issu d'un film *différent* du même pack saga (ex : requête pour Harry Potter: La Chambre des Secrets → fichiers des Reliques de la Mort du même pack 8 films).
+- **Correction :** vérification légère de l'année sur `behaviorHints.filename` — si le nom de fichier contient une année explicite différant de celle du titre demandé, le candidat est rejeté. Un nom de fichier sans année est accepté.
+- **Régression trouvée et corrigée le même jour** après déploiement en production. Re-vérifiée sur les 8 films Harry Potter réels sur les deux comptes.
+
+**Tableau de bord : les résolutions `&dev=true` n'étaient jamais enregistrées (corrigé) :**
+- **Bug :** les branches debug appelaient `writeToCache()` mais ignoraient `m3uLogResolution()`. Toute URL résolue via `&dev=true` affichait des colonnes Release et Debrid vides sur le tableau de bord, et AllDebrid n'apparaissait jamais dans les statistiques globales.
+- **Correction :** `m3uLogResolution()` ajouté dans les quatre branches DEBUG avant leur `exit()`.
+
+**Préférence pondérée AllDebrid/Premiumize — désormais contraignante, remplace les niveaux, vérifiée en production :**
+- **`$aioDebridWeights` est une vraie préférence par résolution :** un poids comme `alldebrid => 70, premiumize => 30` fait gagner AllDebrid sur ~70% des résolutions, surpassant aussi bien le rang de qualité que le niveau de correspondance linguistique (niveaux 0–2 groupés). Un candidat en cache bat toujours un non mis en cache quel que soit le poids. Le niveau 3 reste un dernier recours absolu.
+- **Un poids de 0 est une exclusion stricte :** supprime les candidats de ce service avant tout calcul de niveau ou de qualité.
+- **Correction du contrôle de validité des liens mis en cache :** le contrôle faisait confiance inconditionnellement à toute URL `video_proxy.php` sans la vérifier. Corrigé via `checkVideoProxyUpstreamAlive()`.
+
+**Écran de blocage/limite désormais lu comme une vraie vidéo sur tous les lecteurs IPTV :**
+- **Corrigé "Source Error" sur IMPlayer, MyTVOnline3, STBEMU, etc. :** l'écran de notification était livré en `multipart/x-mixed-replace` (MJPEG — technique réservée aux navigateurs). C'est maintenant un flux MPEG-TS H.264/AAC généré en direct via ffmpeg, rien n'est écrit sur le disque.
+- **Nouveau écran "non disponible pour le moment" :** un titre sans flux disponible affiche une notification vidéo au lieu d'une erreur brute dans le lecteur, pour les films, séries et contenu adulte.
+
+### Mise à jour 09/16/2026
+
+**Corrections AllDebrid sur les deux chemins de résolution, plus améliorations de fiabilité AIOStreams :**
+- **AllDebrid/TorBox injoignables via `torrentSites` (corrigé) :** trois fonctions dans `play.php` manquaient `$useAllDebrid`/`$useTorBox` dans leurs déclarations `global` — tous les contrôles évaluaient silencieusement `false`. AllDebrid et TorBox via le chemin torrent direct ne s'exécutaient jamais réellement.
+- **Migration API AllDebrid v4.1 (corrigé) :** AllDebrid a arrêté `/v4/magnet/status`. Migré vers `/v4.1/magnet/status` avec sa nouvelle forme de réponse `files[].n`/`.l`. Ajout d'une liste d'extensions vidéo pour éviter de sélectionner des fichiers de sous-titres ou d'affiches.
+- **Fausses rejections du contrôle de lecture AIOStreams (corrigé) :** erreurs 5xx transitoires traitées comme permanentes, et `curl_getinfo()` renvoyant `false` pour un Content-Type absent traité comme un mauvais type. Corrigé : réessai unique pour les échecs vraiment transitoires.
+- **Mode `--expiring` du préchauffage (nouveau) :** `prewarm.php --expiring[=N]` re-chauffe les entrées du cache durable avant leur expiration, en utilisant le compte et la langue d'origine de chaque entrée. Cron par défaut désormais avec `--expiring=150`.
+- **Correction de l'auto-blocage de la boucle locale :** `127.0.0.1`/`::1` sont désormais inconditionnellement approuvés avant tout contrôle de blocage/limite — le serveur qui s'appelle lui-même ne peut pas être usurpé via `REMOTE_ADDR`.
+
 ### Mise à jour 09/14/2026
 Une mise à jour majeure concernant la fiabilité, les langues, les sous-titres, l'analyse et la sécurité. Points forts :
 - **Tableau de bord analytique M3uListerr (nouveau) :** un `dashboard.php` autonome qui enregistre et visualise chaque lecture — un globe interactif, des graphiques et un tableau des sessions affichant le titre/l'affiche, les films vs séries TV, le compte, la langue demandée et audio, la release exacte et le service debrideur utilisé, la progression de la lecture (% et h:mm:ss), les sous-titres proposés, le pays/ville/FAI, l'appareil et le user-agent, l'IP, et le temps de résolution. Protégé par connexion avec un stockage SQLite privé, plus un éditeur `config.php` intégré et une gestion des identifiants. Voir [Tableau de bord M3uListerr](#tableau-de-bord-analytique-m3ulisterr).

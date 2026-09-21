@@ -4,6 +4,22 @@ require_once 'config.php';
 require_once 'generate_live_playlist.php';
 
 set_time_limit(0);
+
+// The full movie/series playlist is tens of MB of JSON (and only grows as the
+// TMDB catalog does) - get_vod_streams/get_series below load it, then run a
+// preg_replace over the whole thing for any non-English account (to append
+// &lang=... to every stream URL - see injectStreamLang() in config.php).
+// Confirmed directly: on a stock 128M memory_limit, that preg_replace call
+// fatals with "Allowed memory size exhausted" - silently, since production
+// runs with error_reporting(0) - so a non-English account's client gets an
+// HTTP 200 with a completely empty body and no movies/shows at all, while an
+// English account (which skips the regex entirely - see injectStreamLang())
+// never hits it. Setting this here guarantees enough headroom for this
+// script's own known-heavy operation regardless of the host's php.ini
+// default or whether an external memory_limit override (e.g.
+// docker-entrypoint.sh's PHP_MEMORY_LIMIT) is actually in effect.
+@ini_set('memory_limit', '1024M');
+
 accessLog();
 
 
@@ -254,17 +270,24 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_vod_streams') {
 	}
 
 	if (isset($_GET['type']) && ($_GET['type'] == 'm3u' || $_GET['type'] == 'm3u8')) {
-		if (file_exists('playlist.m3u8')) {
+		// Reuse the content already in memory from the download above rather
+		// than reading the same tens-of-MB file straight back off disk again
+		// (a second full copy in memory, needlessly closer to memory_limit) -
+		// only actually re-read when userCreatePlaylist means it was never
+		// downloaded in this request at all.
+		$m3u8Out = $m3u8Content ?? (file_exists('playlist.m3u8') ? file_get_contents('playlist.m3u8') : null);
+		if ($m3u8Out !== null) {
 			header('Content-Type: audio/x-mpegurl');
-			echo injectStreamLang(file_get_contents('playlist.m3u8'), $xcAccount['lang']);
+			echo injectStreamLang($m3u8Out, $xcAccount['lang']);
 		} else {
 			header('HTTP/1.1 404 Not Found');
 			echo "Playlist file not found. Please run create_playlist.php first.";
 		}
 	} else {
-		if (file_exists('playlist.json')) {
+		$jsonOut = $jsonContent ?? (file_exists('playlist.json') ? file_get_contents('playlist.json') : null);
+		if ($jsonOut !== null) {
 			header('Content-Type: application/json');
-			echo injectStreamLang(file_get_contents('playlist.json'), $xcAccount['lang']);
+			echo injectStreamLang($jsonOut, $xcAccount['lang']);
 		} else {
 			header('HTTP/1.1 404 Not Found');
 			echo json_encode(["error" => "Playlist file not found. Please run create_playlist.php first."]);
@@ -305,9 +328,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_series') {
 			echo "Series playlist file not found. Please run create_tv_playlist.php first.";
 		}
 	} else {
-		if (file_exists('tv_playlist.json')) {
+		// See the matching comment in get_vod_streams above - reuse the
+		// content already downloaded into memory instead of reading the same
+		// large file back off disk again.
+		$jsonOut = $jsonContent ?? (file_exists('tv_playlist.json') ? file_get_contents('tv_playlist.json') : null);
+		if ($jsonOut !== null) {
 			header('Content-Type: application/json');
-			echo injectStreamLang(file_get_contents('tv_playlist.json'), $xcAccount['lang']);
+			echo injectStreamLang($jsonOut, $xcAccount['lang']);
 		} else {
 			header('HTTP/1.1 404 Not Found');
 			echo json_encode(["error" => "Series playlist file not found. Please run create_tv_playlist.php first."]);

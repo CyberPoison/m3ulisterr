@@ -597,6 +597,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_series_info') {
 			"plot" => $fullDetails['overview'],
 			"cast" => $actorsString,
 			"director" => isset($fullDetails['created_by'][0]['name']) ? $fullDetails['created_by'][0]['name'] : '',
+			// Needed by any external client that wants to build a real
+			// per-episode play.php URL itself: the "data" param each episode
+			// carries below is imdbId:tmdbId/season/N/episode/M, base64'd -
+			// exposing imdb_id directly here means a client can construct
+			// that same string without parsing it back out of an episode's
+			// own container_extension field.
+			"imdb_id" => $details['external_ids']['imdb_id'] ?? '',
 			"genre" => $genresString,
 			"releaseDate" => $date,
 			"last_modified" => $lastAirdate,

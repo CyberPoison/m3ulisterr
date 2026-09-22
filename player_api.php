@@ -355,7 +355,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_vod_info') {
 		getAdultInfo($vodId);
 	}
 
-	$infoUrl = "https://api.themoviedb.org/3/movie/{$vodId}?api_key={$apiKey}&append_to_response=credits&include_adult=false&language={$language}";
+	$infoUrl = "https://api.themoviedb.org/3/movie/{$vodId}?api_key={$apiKey}&append_to_response=credits,watch/providers&include_adult=false&language={$language}";
 	$fetchDetails = @file_get_contents($infoUrl);
 	$details = json_decode($fetchDetails, true);
 
@@ -450,6 +450,15 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_vod_info') {
 			"duration_secs" => $details['runtime'] * 60,
 			"duration" => $formattedRuntime,
 			"cast" => $actorsString,
+			// Production country names (TMDB "production_countries") and
+			// streaming platform names for the requesting account's own
+			// region (TMDB "watch/providers", "flatrate" = subscription
+			// streaming, closest match to "which platform is this on" -
+			// excludes rent/buy-only offers on purpose since those aren't a
+			// meaningful "platform" grouping). Both new, additive fields -
+			// existing clients that don't read them are unaffected.
+			"country" => tmdbCountryNames($details),
+			"platform" => tmdbPlatformNames($details, tmdbRegionForLang($xcAccount['lang'] ?? '')),
 			"video" => [],
 			"audio" => [],
 			"bitrate" => 0
@@ -480,7 +489,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_series_info') {
 
 	$vodId = $_GET['series_id'];
 	// First, get the details of the series
-	$infoUrl = "https://api.themoviedb.org/3/tv/{$vodId}?api_key={$apiKey}&include_adult=false&append_to_response=external_ids,credits&language={$language}";
+	$infoUrl = "https://api.themoviedb.org/3/tv/{$vodId}?api_key={$apiKey}&include_adult=false&append_to_response=external_ids,credits,watch/providers&language={$language}";
 	$fetchDetails = @file_get_contents($infoUrl);
 	$details = json_decode($fetchDetails, true);
 
@@ -598,7 +607,13 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_series_info') {
 			],
 			"youtube_trailer" => $ytId,
 			"episode_run_time" => isset($fullDetails['episode_run_time'][0]) ? $fullDetails['episode_run_time'][0] : 0,
-			"category_id" => ""
+			"category_id" => "",
+			// See the matching comment in get_vod_info - $details (not
+			// $fullDetails) is used here since it's the one call in this
+			// handler that always carries watch/providers/production
+			// countries regardless of the season-count branch taken above.
+			"country" => tmdbCountryNames($details),
+			"platform" => tmdbPlatformNames($details, tmdbRegionForLang($xcAccount['lang'] ?? ''))
 		],
 		"episodes" => []
 	];

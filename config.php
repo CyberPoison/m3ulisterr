@@ -417,6 +417,58 @@ function injectStreamLang($content, $lang)
     return preg_replace('/(play\.php\?movieId=\d+)/', '$1&lang=' . urlencode($lang), $content);
 }
 
+// Maps an account's stream-language code ($xcAccounts[...]['lang'] in this
+// file) to the TMDB region code used for reading region-specific data
+// (currently just watch/providers - "which platform" genuinely differs by
+// region, e.g. a US Netflix availability says nothing about France). Add a
+// case here for each additional ?lang= this project supports; unmapped/empty
+// falls back to US, TMDB's most complete region for provider data.
+function tmdbRegionForLang($lang)
+{
+    switch (strtolower((string) $lang)) {
+        case 'fr':
+            return 'FR';
+        case 'pt':
+            return 'PT';
+        default:
+            return 'US';
+    }
+}
+
+// Real production country names from a TMDB movie/tv details response
+// (requires no special append_to_response - production_countries is on the
+// base object for both /movie and /tv). Returns a plain array of names
+// ["France", "United States of America", ...], not ISO codes, since that's
+// what a human-facing folder/category name should read as.
+function tmdbCountryNames($details)
+{
+    if (!isset($details['production_countries']) || !is_array($details['production_countries'])) {
+        return [];
+    }
+    return array_values(array_filter(array_map(function ($c) {
+        return $c['name'] ?? null;
+    }, $details['production_countries'])));
+}
+
+// Real streaming-platform names for $region from a TMDB movie/tv details
+// response fetched with `watch/providers` in append_to_response. Only
+// "flatrate" (subscription streaming) counts as a "platform" here -
+// deliberately excludes "rent"/"buy" offers, which exist for almost every
+// title on almost every storefront and would make the grouping meaningless.
+// Returns [] when nothing is available in $region (very new/unreleased
+// titles, or titles with no streaming deal there at all - both real,
+// expected cases, not errors).
+function tmdbPlatformNames($details, $region)
+{
+    $flatrate = $details['watch/providers']['results'][$region]['flatrate'] ?? null;
+    if (!is_array($flatrate)) {
+        return [];
+    }
+    return array_values(array_filter(array_map(function ($p) {
+        return $p['provider_name'] ?? null;
+    }, $flatrate)));
+}
+
 function locateBaseURL()
 {
     global $userSetHost;

@@ -1,5 +1,6 @@
 <?php
 // Unit tests for aio_availability.php's pure logic. Run: php tests/aio_availability_test.php
+putenv('M3U_DATA_DIR=' . sys_get_temp_dir() . '/aio_avail_unit_' . getmypid());
 require __DIR__ . '/../aio_availability.php';
 
 $failures = 0;
@@ -78,6 +79,64 @@ check('"Dubbed | English | French" still matches French', $r['available']);
 
 $r = aioAvailabilityFromStreams([], 'French');
 check('empty response -> not available (not an error)', !$r['available'] && $r['language_matches'] === 0);
+
+
+// ---- safety: throttled / degraded answers are UNKNOWN, never "none" ----------
+$throttleStub = [['name' => '[🐢] AIOStreams', 'title' => 'AIOStreams public rate-limit exceeded 🐢',
+    'url' => 'https://elfhosted.com/assets/public-rate-limit-exceeded.mp4']];
+$r = run($throttleStub);
+check('rate-limit stub is not a candidate and is flagged', !$r['available'] && $r['state'] === 'rate_limited');
+check('rate-limit stub yields unknown (null), not false', aioAvailabilityFinalAvailable($r) === null);
+
+$errStream = function ($desc) {
+    return ['name' => '[❌] Torrentio', 'description' => $desc, 'streamData' => ['type' => 'error', 'error' => ['title' => '[❌] Torrentio', 'description' => $desc]]];
+};
+$r = run([$errStream('Request timed out')]);
+check('addon failure with no candidates is degraded -> unknown', $r['state'] === 'degraded' && aioAvailabilityFinalAvailable($r) === null);
+$r = run([$errStream('Failed to get metadata'), $errStream('Failed to get metadata')]);
+check('"Failed to get metadata" only = unknown title -> definitive none', $r['state'] === 'definitive' && aioAvailabilityFinalAvailable($r) === false);
+$r = run([$errStream('Request timed out'), mk('AD⚡', 1080, 'AVC')]);
+check('a positive answer stands despite an addon failure', $r['available'] && aioAvailabilityFinalAvailable($r) === true);
+$r = run([$throttleStub[0], mk('AD⚡', 1080, 'AVC')]);
+check('positive answer stands next to a throttle stub too', aioAvailabilityFinalAvailable($r) === true);
+check('empty response is a definitive none', aioAvailabilityFinalAvailable(run([])) === false);
+
+// ---- one summary serves every language ---------------------------------------
+$sum = aioAvailabilitySummarize(['streams' => [mk('AD⚡', 1080, 'AVC', 'French'), mk('PM⚡', 720, 'AVC', 'English')]]);
+check('summary is language independent (French sees 1080p)', aioAvailabilityVerdict($sum, 'French')['best'] === '1080p_x264');
+check('summary is language independent (English sees 720p)', aioAvailabilityVerdict($sum, 'English')['best'] === '720p_x264');
+check('summary is compact (no urls kept)', strpos(json_encode($sum), 'example.invalid') === false);
+
+// ---- token bucket -------------------------------------------------------------
+$cfg = ['perMinute' => 60.0, 'burst' => 5.0];
+@unlink(aioAvailabilityCacheDir() . '/budget');
+[$g] = aioAvailabilityTakeTokens(3, $cfg);
+check('bucket starts full: 3 of 5 granted', $g === 3);
+[$g, $retry] = aioAvailabilityTakeTokens(10, $cfg);
+check('bucket grants only what is left (2), advises a retry', $g === 2 && $retry >= 1);
+[$g] = aioAvailabilityTakeTokens(1, $cfg);
+check('empty bucket grants nothing', $g === 0);
+usleep(1200000);
+[$g] = aioAvailabilityTakeTokens(5, $cfg);
+check('bucket refills with time (~1 token/s at 60/min)', $g >= 1 && $g <= 2);
+[$g] = aioAvailabilityTakeTokens(2, ['perMinute' => 0.5, 'burst' => 5.0]);
+check('shared-instance defaults cannot burst past their tiny bucket', $g <= 2);
+
+// ---- cooldown ------------------------------------------------------------------
+@unlink(aioAvailabilityCacheDir() . '/cooldown');
+check('no cooldown initially', aioAvailabilityCooldownRemaining() === 0);
+aioAvailabilityStartCooldown(120);
+check('cooldown is active after a throttle', aioAvailabilityCooldownRemaining() > 100);
+@unlink(aioAvailabilityCacheDir() . '/cooldown');
+
+// ---- config defaults: conservative on the shared instance, fast on a dedicated one
+$frenchAioStreamsUrl = 'https://aiostreams.elfhosted.com/stremio/x/y';
+$c = aioAvailabilityConfig();
+check('shared instance: tiny budget, low parallelism', !$c['dedicated'] && $c['perMinute'] < 1 && $c['parallel'] <= 4 && $c['url'] !== '');
+$availabilityAioStreamsUrl = 'https://my.private.aiostreams/stremio/z';
+$c = aioAvailabilityConfig();
+check('dedicated instance: high budget, high parallelism', $c['dedicated'] && $c['perMinute'] >= 1000 && $c['parallel'] >= 32 && strpos($c['url'], 'private') !== false);
+unset($availabilityAioStreamsUrl);
 
 echo $failures === 0 ? "\nALL PASSED\n" : "\n$failures FAILED\n";
 exit($failures === 0 ? 0 : 1);

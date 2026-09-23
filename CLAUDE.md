@@ -360,7 +360,7 @@ Paths are relative to the repo root.
 | `debrid.php` | Unified multi-key debrid resolution layer for the direct-torrent path: Real-Debrid, Premiumize, AllDebrid, TorBox. Each service can hold multiple API keys with automatic fallback when one hits a quota. |
 | `live_play.php` | Live TV stream resolution (separate from VOD `play.php`). |
 | `player_api.php` | The actual Xtream Codes `player_api.php` endpoint (account auth, category/stream listings) that IPTV client apps (IMPlayer, MyTVOnline3, STBEMU, etc.) talk to. |
-| `aio_availability.php` | Backs `player_api.php?action=get_vod_availability`: does a movie have any already-cached AIOStreams candidate (1080p/720p x264, 4K x264/x265, 1080p/720p x265) for the account language? Read-only, cached 6h, unknown (`available: null`, HTTP 502) is never cached. Consumed by Decypharr to hide unplayable movies. Self-contained on purpose (see the config.php lesson in Section 5). |
+| `aio_availability.php` | Backs `player_api.php?action=get_vod_availability` (one movie) and `get_availability_batch` (up to 100 movies or shows, curl_multi): does a title have any already-cached AIOStreams candidate (1080p/720p x264, 4K x264/x265, 1080p/720p x265) for the account language? Read-only; one upstream lookup is cached language-independently for 6h. **Throttled/degraded upstream answers are `available: null`, never "none"** (the public ElfHosted AIOStreams allows 100 searches then 1/minute per client IP and answers HTTP 200 with a fake "rate-limit exceeded" stream), a token bucket + cooldown protect real playback's shared rate limit, and a dedicated AIOStreams (`$availabilityAioStreamsUrl`) is what unlocks fast sweeps. Consumed by Decypharr to hide unplayable titles. Self-contained on purpose (see the config.php lesson in Section 5). |
 | `router.php` | Tiny URL rewrite shim: maps a `/series/<user>/<pw>/<id>.<ext>` style path to `play.php` with the right `$_GET` params. |
 | `xmltv.php` | Generates the XMLTV EPG (Electronic Program Guide) feed for Live TV. |
 | `create_playlist.php` / `create_tv_playlist.php` / `create_adult_playlist.php` | Build the M3U/VOD playlists (movies, TV series, adult content) from TMDB, when `$userCreatePlaylist = true`. |
@@ -436,7 +436,7 @@ Condensed from explicit, direct instructions given during this project's
 development — treat these as durable unless a human explicitly overrides
 one in a later session:
 
-0. Tests for the availability endpoint: `php tests/aio_availability_test.php` (unit) and `bash tests/aio_availability_e2e.sh` (real `player_api.php` against `tests/mock_aiostreams.php`) - run both after touching `aio_availability.php` or its `player_api.php` action.
+0. Tests for the availability endpoint: `php tests/aio_availability_test.php` (unit) and `bash tests/aio_availability_e2e.sh` (real `player_api.php` against `tests/mock_aiostreams.php`, incl. throttle/degraded/series/budget cases) - run both after touching `aio_availability.php` or its `player_api.php` action.
 1. Local working copy is never a git repo and never gets secrets stripped —
    it's the developer's real, working install.
 2. Public repo `config.php` secrets must always stay blank; port

@@ -356,9 +356,40 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_vod_availability') {
 		exit();
 	}
 	$availLang = $streamLanguageNames[getRequestedStreamLang()] ?? 'English';
-	list($availStatus, $availBody) = aioAvailabilityLookup($_GET['vod_id'], $availLang, isset($_GET['refresh']));
+	list($availStatus, $availBody) = aioAvailabilityLookup($_GET['vod_id'], $availLang, isset($_GET['refresh']), preg_match('/^\d{4}$/', $_GET['year'] ?? '') ? $_GET['year'] : '');
 	http_response_code($availStatus);
+	if (isset($availBody['retry_after'])) {
+		header('Retry-After: ' . intval($availBody['retry_after']));
+	}
 	echo json_encode($availBody);
+	exit();
+}
+
+// Many titles at once: type=movie|series&items=<tmdb id>[:<year>],... (max
+// AIO_AVAILABILITY_MAX_BATCH). Always HTTP 200 with a per-title
+// available true|false|null; null = unknown, ask again after retry_after.
+if (isset($_GET['action']) && $_GET['action'] == 'get_availability_batch') {
+	header('Content-Type: application/json');
+	$availKind = ($_GET['type'] ?? 'movie') === 'series' ? 'series' : 'movie';
+	$availItems = [];
+	foreach (explode(',', (string) ($_GET['items'] ?? '')) as $part) {
+		$bits = explode(':', trim($part));
+		$availId = intval($bits[0]);
+		if ($availId > 0 && !isset($availItems[$availId])) {
+			$availItems[$availId] = ['id' => $availId, 'year' => preg_match('/^\d{4}$/', $bits[1] ?? '') ? $bits[1] : ''];
+		}
+	}
+	if (!$availItems || count($availItems) > AIO_AVAILABILITY_MAX_BATCH) {
+		http_response_code(400);
+		echo json_encode(['error' => 'items must contain 1-' . AIO_AVAILABILITY_MAX_BATCH . ' tmdb ids']);
+		exit();
+	}
+	$availLang = $streamLanguageNames[getRequestedStreamLang()] ?? 'English';
+	$availOut = aioAvailabilityBatch(array_values($availItems), $availKind, $availLang, isset($_GET['refresh']));
+	if ($availOut['retry_after'] !== null) {
+		header('Retry-After: ' . intval($availOut['retry_after']));
+	}
+	echo json_encode($availOut);
 	exit();
 }
 

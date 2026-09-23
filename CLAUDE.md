@@ -329,6 +329,7 @@ first will save you from re-discovering them the hard way.
   `dashboard.php?action=api&q=sessions` alone does NOT import the latest
   JSONL event log into SQLite; only `q=overview` or `q=refresh` do. Call one
   of those first if you need to see very recent activity via `q=sessions`.
+- **`config.php` is a bind-mounted HOST file in production - the image never overwrites it, so functions added to it do not exist there.** `docker-compose.yml` mounts `./config.php:/var/www/html/config.php`. A function added to the repo's `config.php` (and called by shipped code) fatals in production with an uncaught `Error` until someone pastes it into the host copy by hand - and because `player_api.php`/`play.php` run `error_reporting(0)`, the symptom is just HTTP 200 with an empty body. This caused a long production incident (empty `get_vod_info`/`get_series_info`; missing `makeGetRequest` and `tmdb*` helpers). Put new logic in its own shipped file (like `aio_availability.php`), keep `config.php` to settings, and when reproducing a "200 with empty body", pull the real image and mount the real host `config.php` (`docker run -v .../config.php:/var/www/html/config.php`), then re-enable errors *after* the `error_reporting(0)` line in a debug copy of the script (`display_errors=1` alone does nothing once `error_reporting(0)` has run). Also: `?clearMovieCache=true` deliberately `exit()`s right after clearing - it never resolves in the same request, so test clear and resolve as two calls.
 - **Production deployment is GitHub Actions → `ghcr.io` → Portainer**
   (container `tmdb-vod-php`), not a direct push-to-server. You can check a
   deploy without SSH/docker access: the GitHub Actions API
@@ -359,6 +360,7 @@ Paths are relative to the repo root.
 | `debrid.php` | Unified multi-key debrid resolution layer for the direct-torrent path: Real-Debrid, Premiumize, AllDebrid, TorBox. Each service can hold multiple API keys with automatic fallback when one hits a quota. |
 | `live_play.php` | Live TV stream resolution (separate from VOD `play.php`). |
 | `player_api.php` | The actual Xtream Codes `player_api.php` endpoint (account auth, category/stream listings) that IPTV client apps (IMPlayer, MyTVOnline3, STBEMU, etc.) talk to. |
+| `aio_availability.php` | Backs `player_api.php?action=get_vod_availability`: does a movie have any already-cached AIOStreams candidate (1080p/720p x264, 4K x264/x265, 1080p/720p x265) for the account language? Read-only, cached 6h, unknown (`available: null`, HTTP 502) is never cached. Consumed by Decypharr to hide unplayable movies. Self-contained on purpose (see the config.php lesson in Section 5). |
 | `router.php` | Tiny URL rewrite shim: maps a `/series/<user>/<pw>/<id>.<ext>` style path to `play.php` with the right `$_GET` params. |
 | `xmltv.php` | Generates the XMLTV EPG (Electronic Program Guide) feed for Live TV. |
 | `create_playlist.php` / `create_tv_playlist.php` / `create_adult_playlist.php` | Build the M3U/VOD playlists (movies, TV series, adult content) from TMDB, when `$userCreatePlaylist = true`. |
@@ -434,6 +436,7 @@ Condensed from explicit, direct instructions given during this project's
 development — treat these as durable unless a human explicitly overrides
 one in a later session:
 
+0. Tests for the availability endpoint: `php tests/aio_availability_test.php` (unit) and `bash tests/aio_availability_e2e.sh` (real `player_api.php` against `tests/mock_aiostreams.php`) - run both after touching `aio_availability.php` or its `player_api.php` action.
 1. Local working copy is never a git repo and never gets secrets stripped —
    it's the developer's real, working install.
 2. Public repo `config.php` secrets must always stay blank; port

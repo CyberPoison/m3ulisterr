@@ -2,6 +2,7 @@
 
 require_once 'config.php';
 require_once 'generate_live_playlist.php';
+require_once 'aio_availability.php';
 
 set_time_limit(0);
 
@@ -340,6 +341,24 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_series') {
 			echo json_encode(["error" => "Series playlist file not found. Please run create_tv_playlist.php first."]);
 		}
 	}
+	exit();
+}
+
+// Cheap "does this movie have any cached candidate?" check for one TMDB id,
+// for the requesting account's language - see aio_availability.php. Read-only:
+// never resolves or probes a stream. available=null (HTTP 502/200 with an
+// "error") means unknown, not "nothing available".
+if (isset($_GET['action']) && $_GET['action'] == 'get_vod_availability') {
+	header('Content-Type: application/json');
+	if (!isset($_GET['vod_id']) || intval($_GET['vod_id']) <= 0) {
+		http_response_code(400);
+		echo json_encode(['error' => 'missing_or_invalid_vod_id']);
+		exit();
+	}
+	$availLang = $streamLanguageNames[getRequestedStreamLang()] ?? 'English';
+	list($availStatus, $availBody) = aioAvailabilityLookup($_GET['vod_id'], $availLang, isset($_GET['refresh']));
+	http_response_code($availStatus);
+	echo json_encode($availBody);
 	exit();
 }
 

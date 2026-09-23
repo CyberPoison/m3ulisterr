@@ -59,6 +59,80 @@ $HTTP_PROXY = "";
 //Enable or disable the $HTTP_PROXY setting.
 $USE_HTTP_PROXY = false;
 
+// Shared curl-based GET helper - lives here (not play.php) so player_api.php
+// can use it too without requiring the whole of play.php. Moved here after
+// confirming production's player_api.php get_vod_info/get_series_info
+// (which used a plain @file_get_contents() call to TMDB) were silently
+// fataling in production only - PHP 8.2.33 in the real container, not
+// reproducible on local PHP 8.5 - producing the exact same "HTTP 200,
+// completely empty body" symptom already documented and fixed once before
+// for get_vod_streams/get_series (see the memory_limit comment in
+// player_api.php). play.php's own TMDB/AIOStreams calls already go through
+// this same curl-based helper and work correctly in production, so routing
+// player_api.php's TMDB calls through it too is the safer, already-proven
+// path rather than chasing the exact file_get_contents failure mode further.
+function makeGetRequest($url, $referer = null, $additionalHeaders = [], $headOnly = false) {
+    // Intercept TMDB API requests in CLI mode to run offline
+    if (strpos($url, 'api.themoviedb.org') !== false && php_sapi_name() === 'cli') {
+        return json_encode([
+            "imdb_id" => "tt0043274",
+            "title" => "Alice in Wonderland",
+            "release_date" => "1951-07-28"
+        ]);
+    }
+
+    global $HTTP_PROXY, $timeOut, $USE_HTTP_PROXY;
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, $timeOut);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+    curl_setopt($ch, CURLOPT_ENCODING, "identity");
+
+    if ($headOnly) {
+        curl_setopt($ch, CURLOPT_NOBODY, true);
+        curl_setopt($ch, CURLOPT_HEADER, true);
+    }
+
+    if (isset($HTTP_PROXY) && isset($USE_HTTP_PROXY) && $USE_HTTP_PROXY === true) {
+        curl_setopt($ch, CURLOPT_PROXY, $HTTP_PROXY);
+    }
+
+    $headers = [
+        "Accept: */*",
+        "Accept-Language: en-US,en;q=0.5",
+        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0"
+    ];
+
+    if ($referer) {
+        $headers[] = "Referer: $referer";
+    }
+
+    if (!empty($additionalHeaders)) {
+        $headers = array_merge($headers, $additionalHeaders);
+    }
+
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+
+    $response = curl_exec($ch);
+    $httpStatus = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+    if (curl_errno($ch)) {
+        $error_msg = curl_error($ch);
+        if ($GLOBALS['DEBUG']) {
+            echo "cURL Error in makeGetRequest: " . htmlspecialchars($error_msg) . "</br></br>";
+        }
+        curl_close($ch);
+        return false;
+    }
+    curl_close($ch);
+
+    return $headOnly ? $httpStatus : $response;
+}
+
 //When set to true your playist is created by running the 'create_playlist.php' and 'create_tv_playlist.php'
 //When set to false the the movie and tv show playlist will be loaded from github. The playlists on github 
 //are around 45k movies and around 12k series.

@@ -249,6 +249,14 @@ The following environment variables can be used to configure the container:
 
 # 🔄 Updates & Changelog
 
+### 📅 Update 09/23/2026
+
+**`get_vod_info`/`get_series_info` were silently returning empty responses in production - fixed:**
+- **Root cause:** both endpoints fetched TMDB movie/series details with a plain `@file_get_contents()` call. Confirmed directly against production (PHP 8.2.33 in the real container): this call fatals silently there - `error_reporting(0)` in production hides it, so the client just gets an HTTP 200 with a completely empty body and default (`text/html`) headers, meaning the fatal happens before any output is ever written. Not reproducible on a local PHP 8.5 install with the exact same code and TMDB response, so this is a production-environment-specific failure of `file_get_contents()`, not a logic bug in the endpoint itself.
+- **Downstream impact:** this is why an external catalog consumer (a Decypharr-based WebDAV/rclone bridge for Plex) showed every TV show with zero episodes - `get_series_info` returning nothing meant there was nothing to list under Season → Episode, regardless of how many episodes the show actually has (confirmed on "Frontline" (1983), 45 seasons/855 episodes on TMDB, and reproduced identically on a plain 5-season show). `get_vod_info` (movie metadata) was equally affected.
+- **Fix:** moved the existing, already-production-proven curl-based `makeGetRequest()` helper (previously only in `play.php`, which already uses it successfully for the same kind of TMDB calls) into `config.php` so `player_api.php` can use it too, and switched every TMDB `file_get_contents()` call in `get_vod_info`, `get_series_info` (both the single-batch and >20-season multi-batch paths), and `getTMDBTrailer()` to use it instead.
+- **Tested locally**, including specifically reproducing the >20-season batch path (Frontline, 45 seasons) which previously would have returned nothing, and confirming `get_vod_info`/`get_series_info` now return the full expected payload (episodes, country, platform, imdb_id) for both a small and a large series.
+
 ### 📅 Update 09/22/2026
 
 **New: `get_vod_info`/`get_series_info` now expose real country and streaming-platform data:**

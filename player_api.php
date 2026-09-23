@@ -356,7 +356,14 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_vod_info') {
 	}
 
 	$infoUrl = "https://api.themoviedb.org/3/movie/{$vodId}?api_key={$apiKey}&append_to_response=credits,watch/providers&include_adult=false&language={$language}";
-	$fetchDetails = @file_get_contents($infoUrl);
+	// Confirmed directly: this specific TMDB call (movie details with
+	// credits+watch/providers) via file_get_contents() fataled silently in
+	// production (PHP 8.2.33) - HTTP 200 with a completely empty body, same
+	// symptom as the memory_limit bug above - while play.php's own TMDB
+	// movie-detail lookup, which already goes through this curl-based
+	// helper, works correctly in production. Using it here too instead of
+	// chasing the exact file_get_contents failure mode further.
+	$fetchDetails = makeGetRequest($infoUrl);
 	$details = json_decode($fetchDetails, true);
 
 	$output = [];
@@ -490,7 +497,10 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_series_info') {
 	$vodId = $_GET['series_id'];
 	// First, get the details of the series
 	$infoUrl = "https://api.themoviedb.org/3/tv/{$vodId}?api_key={$apiKey}&include_adult=false&append_to_response=external_ids,credits,watch/providers&language={$language}";
-	$fetchDetails = @file_get_contents($infoUrl);
+	// See the matching comment in get_vod_info - this file_get_contents()
+	// call fataled silently in production; makeGetRequest() (curl) is the
+	// proven-working path for this same kind of TMDB call.
+	$fetchDetails = makeGetRequest($infoUrl);
 	$details = json_decode($fetchDetails, true);
 
 	$actorsString = '';
@@ -526,7 +536,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_series_info') {
 		}, $seasons));
 
 		$url = "https://api.themoviedb.org/3/tv/{$vodId}?api_key={$apiKey}&append_to_response={$seasonsToFetch}";
-		$fullDetails = json_decode(@file_get_contents($url), true);
+		$fullDetails = json_decode(makeGetRequest($url), true);
 	} else {
 		// If more than 20, loop and fetch in batches of 20
 		$batches = ceil($totalSeasons / 20);
@@ -542,7 +552,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_series_info') {
 			}, $seasons));
 
 			$url = "https://api.themoviedb.org/3/tv/{$vodId}?api_key={$apiKey}&append_to_response={$seasonsToFetch}";
-			$batchDetails = json_decode(@file_get_contents($url), true);
+			$batchDetails = json_decode(makeGetRequest($url), true);
 
 			// Merge the seasons details with the main details array
 			foreach ($seasons as $season) {
@@ -750,8 +760,9 @@ function getTMDBTrailer($movieId, $type)
 
 	$url = "https://api.themoviedb.org/3/$type/$movieId/videos?language=en-US&site=YouTube&api_key=$apiKey";
 
-	// Fetch and decode the JSON data
-	$data = @file_get_contents($url);
+	// Fetch and decode the JSON data - see the comment in get_vod_info for
+	// why this uses makeGetRequest() (curl) rather than file_get_contents().
+	$data = makeGetRequest($url);
 	if ($data === false) {
 		// Failed to fetch data from the API
 		return false;

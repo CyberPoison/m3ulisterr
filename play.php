@@ -1911,67 +1911,8 @@ function videoExtensionCheck($url){
 
 ////////////////////////////// Processing ///////////////////////////////
 
-function makeGetRequest($url, $referer = null, $additionalHeaders = [], $headOnly = false) {
-    // Intercept TMDB API requests in CLI mode to run offline
-    if (strpos($url, 'api.themoviedb.org') !== false && php_sapi_name() === 'cli') {
-        return json_encode([
-            "imdb_id" => "tt0043274",
-            "title" => "Alice in Wonderland",
-            "release_date" => "1951-07-28"
-        ]);
-    }
-
-    global $HTTP_PROXY, $timeOut, $USE_HTTP_PROXY;
-    
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, $timeOut);
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);	
-    curl_setopt($ch, CURLOPT_ENCODING, "identity");
-
-    if ($headOnly) {
-        curl_setopt($ch, CURLOPT_NOBODY, true);
-        curl_setopt($ch, CURLOPT_HEADER, true);
-    }
-
-    if (isset($HTTP_PROXY) && isset($USE_HTTP_PROXY) && $USE_HTTP_PROXY === true) {
-        curl_setopt($ch, CURLOPT_PROXY, $HTTP_PROXY);       
-    }
-
-    $headers = [
-        "Accept: */*",
-        "Accept-Language: en-US,en;q=0.5",
-        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0"
-    ];
-
-    if ($referer) {
-        $headers[] = "Referer: $referer";
-    }
-
-    if (!empty($additionalHeaders)) {
-        $headers = array_merge($headers, $additionalHeaders);
-    }
-
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-
-    $response = curl_exec($ch);
-    $httpStatus = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-    if (curl_errno($ch)) {
-        $error_msg = curl_error($ch);
-        if ($GLOBALS['DEBUG']) {
-            echo "cURL Error in makeGetRequest: " . htmlspecialchars($error_msg) . "</br></br>";
-        }
-        curl_close($ch);
-        return false;
-    }
-    curl_close($ch);
-
-    return $headOnly ? $httpStatus : $response;
-}
+// makeGetRequest() now lives in config.php (shared with player_api.php - see
+// the comment there for why).
 
 function makePostRequest($url, $referer = null, $postData = null, $contentType = 'application/x-www-form-urlencoded', $additionalHeaders = []) {
     global $HTTP_PROXY, $timeOut, $USE_HTTP_PROXY;

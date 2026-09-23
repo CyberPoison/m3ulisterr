@@ -309,6 +309,23 @@ $userDefinedOrder = [
 // $requestedLang handling in play.php) - leave blank to disable all three.
 $frenchAioStreamsUrl = '';
 
+// ── Availability checks (optional) ───────────────────────────────────────
+// Decypharr asks player_api.php (get_availability_batch, see
+// aio_availability.php) whether each movie/show has at least one cached
+// candidate, and hides those that don't. Every check is one AIOStreams
+// lookup. The public ElfHosted instance allows only 100 searches then 1 per
+// minute per client IP and answers over-limit requests with a fake
+// "rate-limit exceeded" stream, so by default these checks run at a tiny
+// budget (0.5 lookups/minute, burst 5) that leaves the limit to real
+// playback. To check the whole catalog quickly, point them at a DEDICATED
+// AIOStreams (a private/self-hosted instance with no shared limit) and
+// uncomment the lines below. All are optional and read with defaults, so an
+// older config.php keeps working.
+// $availabilityAioStreamsUrl = 'https://YOUR-DEDICATED-AIOSTREAMS/stremio/UUID/CONFIG'; // used ONLY for availability checks
+// $availabilityMaxPerMinute  = 3000;  // sustained lookups per minute (default with a dedicated URL: 3000)
+// $availabilityBurst         = 300;   // lookups allowed in a burst (default with a dedicated URL: 300)
+// $availabilityParallel      = 64;    // simultaneous lookups per request (default with a dedicated URL: 64)
+
 // Direct OpenSubtitles REST credentials, used ONLY as a fallback for when
 // the AIOStreams subtitle route comes back empty - which it does whenever
 // its bundled OpenSubtitles provider is having a bad day (confirmed against

@@ -128,15 +128,30 @@ check('no cooldown initially', aioAvailabilityCooldownRemaining() === 0);
 aioAvailabilityStartCooldown(120);
 check('cooldown is active after a throttle', aioAvailabilityCooldownRemaining() > 100);
 @unlink(aioAvailabilityCacheDir() . '/cooldown');
+aioAvailabilityResetCooldownLevel();
+$secs = [];
+for ($i = 0; $i < 7; $i++) {
+    aioAvailabilityStartCooldown();
+    $secs[] = aioAvailabilityCooldownRemaining();
+}
+check('cooldown escalates 5m -> 10m -> 20m -> 40m -> 60m and stays capped',
+    $secs[0] > 290 && $secs[0] <= 300 && $secs[1] > 590 && $secs[2] > 1190 && $secs[3] > 2390 && $secs[4] > 3590 && $secs[5] > 3590 && $secs[6] <= 3600);
+aioAvailabilityResetCooldownLevel();
+aioAvailabilityStartCooldown();
+check('a successful lookup resets the escalation back to 5 minutes', aioAvailabilityCooldownRemaining() <= 300);
+@unlink(aioAvailabilityCacheDir() . '/cooldown');
+aioAvailabilityResetCooldownLevel();
 
 // ---- config defaults: conservative on the shared instance, fast on a dedicated one
 $frenchAioStreamsUrl = 'https://aiostreams.elfhosted.com/stremio/x/y';
 $c = aioAvailabilityConfig();
 check('shared instance: tiny budget, low parallelism', !$c['dedicated'] && $c['perMinute'] < 1 && $c['parallel'] <= 4 && $c['url'] !== '');
 $availabilityAioStreamsUrl = 'https://my.private.aiostreams/stremio/z';
+$availabilityProxy = 'http://user:pass@proxy.example.com:8080';
 $c = aioAvailabilityConfig();
 check('dedicated instance: high budget, high parallelism', $c['dedicated'] && $c['perMinute'] >= 1000 && $c['parallel'] >= 32 && strpos($c['url'], 'private') !== false);
-unset($availabilityAioStreamsUrl);
+check('proxy setting propagated to config', $c['proxy'] === 'http://user:pass@proxy.example.com:8080');
+unset($availabilityAioStreamsUrl, $availabilityProxy);
 
 echo $failures === 0 ? "\nALL PASSED\n" : "\n$failures FAILED\n";
 exit($failures === 0 ? 0 : 1);

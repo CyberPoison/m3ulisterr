@@ -4872,10 +4872,12 @@ function fetchAioStreamsList($url) {
         }
     }
 
+    global $aioStreamsProxy;
+
     for ($attempt = 1; $attempt <= 2; $attempt++) {
         $started = microtime(true);
         $ch = curl_init($url);
-        curl_setopt_array($ch, [
+        $opts = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_CONNECTTIMEOUT => 10,
@@ -4883,7 +4885,11 @@ function fetchAioStreamsList($url) {
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
             CURLOPT_USERAGENT => 'Mozilla/5.0',
-        ]);
+        ];
+        if (!empty($aioStreamsProxy) && is_string($aioStreamsProxy)) {
+            $opts[CURLOPT_PROXY] = trim($aioStreamsProxy);
+        }
+        curl_setopt_array($ch, $opts);
         $body = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);

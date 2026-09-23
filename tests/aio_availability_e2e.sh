@@ -15,7 +15,7 @@ trap cleanup EXIT
 make_root() { # name extra-php-config
   local d="$WORK/$1"; mkdir -p "$d"
   for f in "$ROOT"/*.php; do [ "$(basename "$f")" = config.php ] || ln -s "$f" "$d/$(basename "$f")"; done
-  printf '<?php\nrequire "%s/config.php";\n$frenchAioStreamsUrl = "http://127.0.0.1:%s";\n%s\n' "$ROOT" "$MOCK_PORT" "$2" > "$d/config.php"
+  printf '<?php\nrequire "%s/config.php";\n$availabilityProxy = "";\n$aioStreamsProxy = "";\n$frenchAioStreamsUrl = "http://127.0.0.1:%s";\n%s\n' "$ROOT" "$MOCK_PORT" "$2" > "$d/config.php"
 }
 start_api() { # name port datadir
   (cd "$WORK/$1" && M3U_DATA_DIR="$3" $PHP -S 127.0.0.1:$2 >"$WORK/$1.log" 2>&1) &

@@ -309,6 +309,14 @@ $userDefinedOrder = [
 // $requestedLang handling in play.php) - leave blank to disable all three.
 $frenchAioStreamsUrl = '';
 
+// Proxy used strictly for upstream AIOStreams candidate lookups during availability checks (e.g. 'http://user:pass@host:port').
+// Leave blank to connect directly without a proxy.
+// Used by aio_availability.php (VOD/series candidate availability checks).
+$availabilityProxy = '';
+
+// Optional proxy used by play.php for playback stream searching. Leave blank to connect directly.
+$aioStreamsProxy = '';
+
 // ── Availability checks (optional) ───────────────────────────────────────
 // Decypharr asks player_api.php (get_availability_batch, see
 // aio_availability.php) whether each movie/show has at least one cached

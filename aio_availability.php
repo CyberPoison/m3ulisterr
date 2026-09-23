@@ -38,6 +38,7 @@ const AIO_AVAILABILITY_LADDER = [
 
 const AIO_AVAILABILITY_TTL = 6 * 3600;
 const AIO_AVAILABILITY_MAX_BATCH = 100;
+// Base cooldown after a throttle answer (escalates, see aioAvailabilityStartCooldown()).
 const AIO_AVAILABILITY_COOLDOWN = 300;
 
 // Series have no single "the" episode to ask about: a show counts as available
@@ -75,16 +76,19 @@ function aioAvailabilityCacheDir() {
 //   $availabilityMaxPerMinute   sustained upstream lookups per minute
 //   $availabilityBurst          bucket size (lookups allowed in a burst)
 //   $availabilityParallel       simultaneous upstream lookups per request
+//   $availabilityProxy          optional HTTP proxy for upstream requests (e.g. 'http://user:pass@host:port')
 function aioAvailabilityConfig() {
-    global $frenchAioStreamsUrl, $availabilityAioStreamsUrl, $availabilityMaxPerMinute, $availabilityBurst, $availabilityParallel;
+    global $frenchAioStreamsUrl, $availabilityAioStreamsUrl, $availabilityMaxPerMinute, $availabilityBurst, $availabilityParallel, $availabilityProxy, $aioStreamsProxy;
     $dedicated = !empty($availabilityAioStreamsUrl);
     $url = $dedicated ? $availabilityAioStreamsUrl : ($frenchAioStreamsUrl ?? '');
+    $proxy = !empty($availabilityProxy) ? $availabilityProxy : ($aioStreamsProxy ?? '');
     return [
         'url' => rtrim((string) $url, '/'),
         'dedicated' => $dedicated,
         'perMinute' => (float) ($availabilityMaxPerMinute ?? ($dedicated ? 3000 : 0.5)),
         'burst' => (float) ($availabilityBurst ?? ($dedicated ? 300 : 5)),
         'parallel' => max(1, (int) ($availabilityParallel ?? ($dedicated ? 64 : 4))),
+        'proxy' => is_string($proxy) ? trim($proxy) : '',
     ];
 }
 
@@ -293,10 +297,29 @@ function aioAvailabilityCooldownRemaining() {
     return max(0, intval(@file_get_contents($f)) - time());
 }
 
-function aioAvailabilityStartCooldown($seconds = AIO_AVAILABILITY_COOLDOWN) {
+// Escalating: the first throttle costs 5 minutes, and every further throttle
+// that happens before any lookup has succeeded doubles it (10, 20, 40, then a
+// 60 minute cap) - a source that keeps hitting the limit is misconfigured or
+// exhausted, and retrying every 5 minutes only drains the allowance real
+// playback shares. $seconds forces a fixed length (no escalation).
+function aioAvailabilityStartCooldown($seconds = null) {
     $dir = aioAvailabilityCacheDir();
-    if ($dir !== false) {
-        @file_put_contents($dir . '/cooldown', (string) (time() + $seconds));
+    if ($dir === false) {
+        return;
+    }
+    if ($seconds === null) {
+        $level = min(5, intval(@file_get_contents($dir . '/cooldown_level')) + 1);
+        @file_put_contents($dir . '/cooldown_level', (string) $level);
+        $seconds = min(3600, AIO_AVAILABILITY_COOLDOWN * (2 ** ($level - 1)));
+    }
+    @file_put_contents($dir . '/cooldown', (string) (time() + $seconds));
+}
+
+// A lookup that was NOT throttled proves the allowance is back.
+function aioAvailabilityResetCooldownLevel() {
+    $dir = aioAvailabilityCacheDir();
+    if ($dir !== false && is_file($dir . '/cooldown_level')) {
+        @unlink($dir . '/cooldown_level');
     }
 }
 
@@ -336,7 +359,7 @@ function aioAvailabilityTakeTokens($want, array $cfg) {
 
 // Sliding-window curl_multi: up to $parallel lookups in flight at once.
 // $urls is key => url; returns key => ['status' => int, 'body' => string|false].
-function aioAvailabilityFetchMany(array $urls, $parallel) {
+function aioAvailabilityFetchMany(array $urls, $parallel, $proxy = '') {
     $results = [];
     if (!$urls) {
         return $results;
@@ -345,9 +368,9 @@ function aioAvailabilityFetchMany(array $urls, $parallel) {
     $attempts = [];
     $mh = curl_multi_init();
     $inflight = [];
-    $start = function ($key) use (&$mh, &$inflight, &$attempts, $urls) {
+    $start = function ($key) use (&$mh, &$inflight, &$attempts, $urls, $proxy) {
         $ch = curl_init($urls[$key]);
-        curl_setopt_array($ch, [
+        $opts = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_CONNECTTIMEOUT => 10,
@@ -355,7 +378,11 @@ function aioAvailabilityFetchMany(array $urls, $parallel) {
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
             CURLOPT_USERAGENT => 'Mozilla/5.0',
-        ]);
+        ];
+        if (!empty($proxy)) {
+            $opts[CURLOPT_PROXY] = $proxy;
+        }
+        curl_setopt_array($ch, $opts);
         curl_multi_add_handle($mh, $ch);
         $inflight[(int) $ch] = [$ch, $key];
         $attempts[$key] = ($attempts[$key] ?? 0) + 1;
@@ -433,7 +460,8 @@ function aioAvailabilityGetSummaries(array $requests, array $cfg, $refresh) {
         $urls[$key] = aioAvailabilityStreamUrl($cfg, $kind, $id, $probe);
     }
     $throttled = false;
-    foreach (aioAvailabilityFetchMany($urls, $cfg['parallel']) as $key => $r) {
+    $anyOk = false;
+    foreach (aioAvailabilityFetchMany($urls, $cfg['parallel'], $cfg['proxy'] ?? '') as $key => $r) {
         if ($r['body'] === false || $r['status'] !== 200) {
             continue;
         }
@@ -446,6 +474,7 @@ function aioAvailabilityGetSummaries(array $requests, array $cfg, $refresh) {
             $throttled = true;
             continue; // never cached, never trusted
         }
+        $anyOk = true;
         // Degraded (partial) answers are usable for a positive verdict but
         // must not be remembered as the last word for hours.
         if (!$summary['degraded']) {
@@ -455,7 +484,9 @@ function aioAvailabilityGetSummaries(array $requests, array $cfg, $refresh) {
     }
     if ($throttled) {
         aioAvailabilityStartCooldown();
-        $retryAfter = AIO_AVAILABILITY_COOLDOWN;
+        $retryAfter = aioAvailabilityCooldownRemaining();
+    } elseif ($anyOk) {
+        aioAvailabilityResetCooldownLevel();
     }
     return [$summaries, $throttled, $retryAfter];
 }

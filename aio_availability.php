@@ -461,6 +461,7 @@ function aioAvailabilityGetSummaries(array $requests, array $cfg, $refresh) {
     }
     $throttled = false;
     $anyOk = false;
+    $empties = []; // 200 answers with no streams at all: real "none", or a transient blank under load?
     foreach (aioAvailabilityFetchMany($urls, $cfg['parallel'], $cfg['proxy'] ?? '') as $key => $r) {
         if ($r['body'] === false || $r['status'] !== 200) {
             continue;
@@ -475,12 +476,45 @@ function aioAvailabilityGetSummaries(array $requests, array $cfg, $refresh) {
             continue; // never cached, never trusted
         }
         $anyOk = true;
+        if ($summary['total_streams'] === 0) {
+            $empties[$key] = $summary; // confirmed below before it counts as "nothing"
+            continue;
+        }
         // Degraded (partial) answers are usable for a positive verdict but
         // must not be remembered as the last word for hours.
         if (!$summary['degraded']) {
             aioAvailabilityWriteSummary($go[$key], $summary);
         }
         $summaries[$key] = $summary;
+    }
+    // An empty list with no error stream is what a title nobody has streams
+    // for looks like - and also what a lookup that blanked under load looks
+    // like (observed on a private instance at 16-32 lookups in flight, where
+    // the same titles answered normally when asked again). Trusting it would
+    // hide real titles, so ask once more: two blanks in a row are a real
+    // "none"; anything else uses the second answer. Without a token to spare
+    // for the second ask it stays unknown.
+    if ($empties && !$throttled) {
+        [$granted2] = aioAvailabilityTakeTokens(count($empties), $cfg);
+        $again = [];
+        foreach (array_slice(array_keys($empties), 0, $granted2) as $key) {
+            $again[$key] = $urls[$key];
+        }
+        foreach (aioAvailabilityFetchMany($again, $cfg['parallel'], $cfg['proxy'] ?? '') as $key => $r) {
+            $data = ($r['body'] !== false && $r['status'] === 200) ? json_decode($r['body'], true) : null;
+            if (!is_array($data)) {
+                continue;
+            }
+            $second = aioAvailabilitySummarize($data);
+            if ($second['throttled']) {
+                $throttled = true;
+                continue;
+            }
+            if (!$second['degraded']) {
+                aioAvailabilityWriteSummary($go[$key], $second);
+            }
+            $summaries[$key] = $second;
+        }
     }
     if ($throttled) {
         aioAvailabilityStartCooldown();

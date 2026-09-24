@@ -85,6 +85,13 @@ b=$(hits 2001); call $F 2001 UnlimitedFR; b2=$(hits 2001); rm -f "$WORK"/data_fa
 [ "$(hits 2001)" -gt "$b2" ] && ok "a throttled answer is never cached (re-asked once the cooldown ended)" || bad "throttle answer cached"
 rm -f "$WORK"/data_fast/availability/cooldown
 
+echo "--- an empty answer is confirmed once before it counts as 'none'"
+call $F 5001 UnlimitedFR; expect "blank on the first ask, streams on the second -> available (transient blank not trusted)" available true
+[ "$(hits 5001)" = "2" ] && ok "  it took exactly two upstream asks" || bad "5001 hits=$(hits 5001)"
+call $F 5002 UnlimitedFR; expect "blank twice in a row -> a real none" available false
+[ "$(hits 5002)" = "2" ] && ok "  confirmed with exactly one extra ask" || bad "5002 hits=$(hits 5002)"
+b=$(hits 5002); call $F 5002 UnlimitedFR; [ "$(hits 5002)" = "$b" ] && ok "  and the confirmed none is cached (no further asks)" || bad "confirmed none not cached"
+
 echo "--- batch endpoint"
 batch $F movie 1001:2020,1002:2020,1004:2020,1005:2020 UnlimitedFR
 expect_code "batch ok" 200; expect "  1001 available" results.0.available true; expect "  1002 none" results.1.available false; expect "  1004 none" results.2.available false; expect "  1005 available" results.3.available true
@@ -110,7 +117,7 @@ python3 -c "import sys; sys.exit(0 if float('$el') < 8 else 1)" && ok "40 x 1s l
 expect "  all 40 answered" results.39.available true
 
 echo "--- shared-instance defaults protect playback (tight instance: burst 5, parallel 4)"
-batch $TIGHT_PORT movie 1001,1002,1004,1005,1006,1008,2003,4001,4002,4003 UnlimitedFR
+batch $TIGHT_PORT movie 1001,1002,1005,1006,1008,2003,4001,4002,4003,4004 UnlimitedFR
 python3 - "$BODY" <<'EOF' && ok "only the 5-token burst reached upstream; the rest are unknown with a retry hint" || bad "tight budget not enforced"
 import json,sys
 d=json.loads(sys.argv[1]); r=d['results']
@@ -119,7 +126,7 @@ assert len(answered)==5, len(answered)
 assert len(unknown)==5 and all(x['error']=='availability_budget' for x in unknown), unknown
 assert d['retry_after'] and d['retry_after']>=1
 EOF
-batch $TIGHT_PORT movie 1001,1002,1004,1005,1006,1008,2003,4001,4002,4003 UnlimitedFR; python3 - "$BODY" <<'EOF' && ok "answered titles come from cache and cost no tokens on the next call" || bad "cache did not spare the budget"
+batch $TIGHT_PORT movie 1001,1002,1005,1006,1008,2003,4001,4002,4003,4004 UnlimitedFR; python3 - "$BODY" <<'EOF' && ok "answered titles come from cache and cost no tokens on the next call" || bad "cache did not spare the budget"
 import json,sys
 d=json.loads(sys.argv[1]); assert sum(1 for x in d['results'] if x['available'] is not None)>=5
 EOF

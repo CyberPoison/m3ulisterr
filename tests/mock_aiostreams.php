@@ -49,6 +49,9 @@ switch ($id) {
     case 1008: echo json_encode(['streams' => [s('AD⚡', 480, 'AVC', 'French')]]); break;
     // Real TMDB id (Oppenheimer, 2023): one release of another year, one right.
     case 872585: echo json_encode(['streams' => [s('AD⚡', 1080, 'AVC', 'French', 'Oppenheimer.1995.1080p.mkv'), s('PM⚡', 720, 'AVC', 'French', 'Oppenheimer.2023.720p.mkv')]]); break;
+    // 5001: blank on the FIRST ask only (a transient empty), then normal. 5002: always blank (a real "none").
+    case 5001: echo json_encode(['streams' => filesize("$dir/hits/$id") === 1 ? [] : [s('AD⚡', 1080, 'AVC', 'French')]]); break;
+    case 5002: echo json_encode(['streams' => []]); break;
     case 2001: echo json_encode(['streams' => [['name' => '[🐢] AIOStreams', 'title' => 'AIOStreams public rate-limit exceeded 🐢', 'url' => 'https://elfhosted.com/assets/public-rate-limit-exceeded.mp4']]]); break;
     case 2002: echo json_encode(['streams' => [errStream('Request timed out')]]); break;
     case 2003: echo json_encode(['streams' => [errStream('Failed to get metadata'), errStream('Failed to get metadata')]]); break;

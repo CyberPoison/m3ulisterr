@@ -371,6 +371,18 @@ $openSubtitlesApiToken = '';
 //'upMovies_to',
 */
 
+// ── Adult titles through a Stremio addon (optional) ─────────────────────────
+// Base URL of a Stremio adult addon (everything before "/manifest.json"; the
+// addon's own config token is part of that URL, so treat it as a secret).
+// When set, play.php resolves adult-movies.json titles by searching the
+// addon's catalogs (found from its manifest) for the title, collecting the
+// torrent hashes it lists, and resolving those through your debrid services
+// (Premiumize / AllDebrid / TorBox / Real-Debrid) - cache only, so nothing
+// is ever started downloading, and viewers only ever receive the debrid link,
+// never the addon URL. If the addon finds nothing cached, the original
+// site-scraping still runs. Leave blank to keep the original behavior only.
+$adultAddonUrl = '';
+
 // On my todo list.
 // Language mapping between TMDB and Torrent Site. 
 $languageMapping = [

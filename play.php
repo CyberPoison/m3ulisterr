@@ -9,6 +9,7 @@ require_once 'libs/JavaScriptUnpacker.php';
 require_once 'config.php';
 require_once 'm3ulisterr_lib.php';
 require_once 'debrid.php';
+require_once 'adult_addon.php';
 
 // Moved here, ahead of the previewBlock admin-preview block below (this used
 // to run after it, at the top of "Run Script") - a stray PHP notice/warning
@@ -916,7 +917,7 @@ function playAdultVideo($movieId) {
 			m3uServeUnavailableNotice(); // exits
 		}
 
-		if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkLinkStatusCode($cachedUrl)) {
+		if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkLinkStatusCode($cachedUrl, false, true)) {
 			if ($GLOBALS['DEBUG']) {
 				echo "Service: Pulled from the cache - Url: " . $cachedUrl . "</br></br>";
 				echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
@@ -966,6 +967,30 @@ function playAdultVideo($movieId) {
 		$GLOBALS['globalTitle'] = $details['name'];
 		$GLOBALS['logTitle'] = $details['name'];
 		
+		// Preferred path: look the title up through the configured Stremio addon
+		// ($adultAddonUrl, see adult_addon.php) and resolve it via debrid. Only a
+		// link that is already cached on a debrid service comes back, and never
+		// the addon's own URL. If the addon is off, has no match, or has nothing
+		// cached, the original site-scraping below still runs.
+		if (adultAddonEnabled()) {
+			$addonLink = adultAddonResolve($details['name']);
+			if ($addonLink !== false) {
+				if ($GLOBALS['DEBUG']) {
+					echo "Service: Adult addon - Url: " . $addonLink . "</br></br>";
+					echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
+					writeToCache($key, $addonLink);
+					exit;
+				}
+				writeToCache($key, $addonLink);
+				header("HTTP/1.1 301 Moved Permanently");
+				header("Location: $addonLink");
+				exit;
+			}
+			if ($GLOBALS['DEBUG']) {
+				echo "Adult addon found no cached source - falling back to the site scrapers.</br></br>";
+			}
+		}
+
 
         if (!isset($details['sources']) || !is_string($details['sources'])) {
             if ($GLOBALS['DEBUG']) {
@@ -2558,7 +2583,9 @@ function checkVideoProxyUpstreamAlive($proxyUrl) {
     return true;
 }
 
-function checkLinkStatusCode($url, $verify = false)
+// $allowOctetStream: also accept a 2xx application/octet-stream answer for a URL
+// that names a video file (debrid CDNs serve direct files that way).
+function checkLinkStatusCode($url, $verify = false, $allowOctetStream = false)
 {
 	global $HTTP_PROXY, $USE_HTTP_PROXY;
 
@@ -2640,7 +2667,8 @@ function checkLinkStatusCode($url, $verify = false)
 		if (stripos($contentType, 'video') !== false || 
 			stripos($contentType, 'mpegurl') !== false || 
 			(stripos($contentType, 'text') !== false && stripos($url, '.m3u8') !== false) || 
-			(stripos($contentType, 'application/force-download') !== false && $isVideoExtension)) {
+			(stripos($contentType, 'application/force-download') !== false && $isVideoExtension) ||
+			($allowOctetStream && stripos($contentType, 'application/octet-stream') !== false && $isVideoExtension)) {
 			
 			if ($GLOBALS['DEBUG']) {
 				echo 'Link Checker - Successful: The URL is accessible and valid for streaming.</br></br>';

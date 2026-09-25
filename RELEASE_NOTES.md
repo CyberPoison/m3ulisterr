@@ -4,6 +4,17 @@
 <details><summary><b>🌐 English Changelog</b></summary>
 
 
+### 📅 Update 09/26/2026
+
+**New: adult titles can be looked up through a Stremio addon (`$adultAddonUrl`, optional):**
+- **What it does:** for a title in `adult-movies.json`, `play.php` reads the addon's `manifest.json` to find its searchable catalogs (ThePornDB scene search first, then generic torrent search, never live cams), searches for the title, collects the torrent hashes listed under the best-matching results and resolves them through your debrid services - **cache only** (Premiumize batched instant-availability then direct link, then AllDebrid / TorBox / Real-Debrid), so nothing is ever started downloading. If the addon is off, unreachable, has no match or nothing cached, the original site-scraping runs exactly as before.
+- **The addon URL never leaves the server:** it embeds the addon's own config (debrid / indexer keys), so it is used only as an index. Its `_play` links are never requested (they can start a download and redirect to a placeholder) and viewers only ever get the debrid link.
+- **Strict title matching:** the store search is fuzzy, so a result must contain at least 80% of the wanted words, every number of the wanted title must appear in it ("... 122" is not "#102"), and extra words lower its score - a wrong scene is worse than falling back to the scrapers. Scene / volume / resolution qualifiers are ignored.
+- **Fast:** all catalogs are searched at once and all stream lists fetched at once (curl_multi); a typical lookup is 1-2 s, and the manifest is cached for 6 h.
+- **Cache hits work for direct debrid files:** `checkLinkStatusCode()` gained an opt-in `$allowOctetStream` (used only by the adult cache-hit check) because debrid CDNs serve direct video files as `application/octet-stream`; without it every replay re-ran the lookup.
+- **Lives in its own shipped file (`adult_addon.php`), not `config.php`** (host `config.php` is bind-mounted and never updated by the image); `config.php` only documents `$adultAddonUrl` (blank here - put your real addon URL, without `/manifest.json`, in the host `config.php`; it is a secret).
+- **Verified:** `php tests/adult_addon_test.php` (unit + a mock Stremio addon: catalog choice from the manifest, hash extraction from `infoHash` and `_play` URLs, ranking, title matching incl. wrong-number and long-title cases, the addon token never in candidates or the returned link, `_play` never requested, one batched Premiumize check, unreachable addon -> false), plus real `play.php` runs: 301 to a Premiumize CDN link (206 on a range request), cache hit on replay, no-candidate title and disabled addon both fall back to the scrapers.
+
 ### 📅 Update 09/23/2026
 
 **New: `get_vod_availability` / `get_availability_batch` - tell a client which movies and shows have a cached candidate (used by Decypharr to hide titles that could never play):**

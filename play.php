@@ -102,9 +102,28 @@ if (isset($_GET['clearCache']) && $_GET['clearCache'] === 'true') {
 // without ever re-running the resolution logic that would now behave
 // differently.
 if (isset($_GET['clearMovieCache']) && $_GET['clearMovieCache'] === 'true' && isset($_GET['movieId'])) {
+    $targetMovieId = $_GET['movieId'];
     $targetLang = getRequestedStreamLang();
     $targetLangSuffix = (!empty($targetLang) && $targetLang !== 'en') ? '_' . $targetLang : '';
-    $targetKey = $_GET['movieId'] . $targetLangSuffix . '_tmdb_url';
+
+    if (intval($targetMovieId) > 10000000) {
+        // Adult titles (playAdultVideo()) cache under their own key, with no
+        // language suffix - matching that, not the regular-movie key below,
+        // is what makes this actually clear an adult title's stuck entry.
+        $targetKey = $targetMovieId . '_adult_url';
+    } elseif (($_GET['type'] ?? 'movies') === 'series' && isset($_GET['data'])) {
+        // A series episode's key is the show id + season/episode, decoded
+        // from &data= the same way the real request parses it (see the
+        // 'series' branch above).
+        $seriesEpisodeData = explode(':', (string) base64_decode((string) $_GET['data']));
+        $subEpData = explode('/', $seriesEpisodeData[1] ?? '');
+        $targetMovieId = $subEpData[0] !== '' && isset($subEpData[0]) ? $subEpData[0] : $targetMovieId;
+        $targetEpisodeId = 's' . str_pad($subEpData[2] ?? '0', 2, '0', STR_PAD_LEFT)
+            . 'e' . str_pad($subEpData[4] ?? '0', 2, '0', STR_PAD_LEFT);
+        $targetKey = $targetMovieId . $targetLangSuffix . '_series_' . $targetEpisodeId . '_url';
+    } else {
+        $targetKey = $targetMovieId . $targetLangSuffix . '_tmdb_url';
+    }
 
     $cacheFilePath = 'cache.json';
     $cacheData = file_exists($cacheFilePath) ? (json_decode((string) file_get_contents($cacheFilePath), true) ?: []) : [];

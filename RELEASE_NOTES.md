@@ -4,6 +4,14 @@
 <details><summary><b>🌐 English Changelog</b></summary>
 
 
+### 📅 Update 09/30/2026
+
+**Fix: `?clearMovieCache=true` didn't actually clear adult titles (or series episodes):**
+- **What was broken:** the surgical single-key cache clear always built the key as `<id>[_lang]_tmdb_url` - the regular-movie format - no matter what was actually cached. Adult titles (`playAdultVideo()`, ids over 10,000,000) cache under `<id>_adult_url`, so the endpoint always reported "No cache entry found" for them even when a stale (e.g. `_failed_`) entry was sitting right there, with no way to surgically clear it. Series episodes have their own key (show id + season/episode) and weren't handled either.
+- **Fix:** the endpoint now builds the same key the real request would use for that id/type - `_adult_url` for ids over 10,000,000, the show id + `s01e02`-style key (decoded from `&data=`) for `&type=series`, and the original `_tmdb_url` format otherwise.
+- **Found while investigating a real report:** a specific adult title was stuck showing "unavailable" to real viewers because of a `_failed_` entry cached before today's [[adult addon]] fix reached production - it self-heals within the entry's TTL, but couldn't be cleared on demand until now.
+- **Verified:** manually seeded cache.json with an adult key, a series key and a regular-movie key, cleared each via its own request, confirmed exactly the right key was removed and the other two were untouched; also confirmed the "no entry found" message still fires correctly for an unknown id.
+
 ### 📅 Update 09/26/2026
 
 **New: adult titles can be looked up through a Stremio addon (`$adultAddonUrl`, optional):**

@@ -20,6 +20,12 @@ function instantAvailability_PM($hashes, $torrents) {
     $pmCalls[] = $hashes;
     return array_values(array_filter($torrents, fn($t) => $t['hash'] === $cachedHash));
 }
+$rdCalls = 0;
+function instantAvailability_RD($torrents, $tSite) {
+    global $rdCalls;
+    $rdCalls++;
+    return false; // never instantly available
+}
 function getStreamingLink_PM($t, $magnet, $tag) {
     return 'https://cdn.example.invalid/direct/' . $t[0]['hash'] . '.mp4';
 }
@@ -96,6 +102,16 @@ check('cached hash -> direct debrid link', $link === 'https://cdn.example.invali
 check('returned link does not contain the addon token or host', !str_contains($link, 'TOKEN_SECRET') && !str_contains($link, '127.0.0.1'));
 check('Premiumize cache checked in ONE batch call', count($pmCalls) === 2 && count($pmCalls[1]) === count($hashes));
 check('unknown title -> false even with a cached hash configured', adultAddonResolve('Nothing Matches This Name') === false);
+
+// --- Real-Debrid has no cache-check API: each probe adds + deletes a magnet, so it is bounded
+$usePremiumize = false; $useRealDebrid = true; $rdCalls = 0;
+$many = [];
+for ($i = 0; $i < ADULT_ADDON_MAX_CANDIDATES; $i++) {
+    $many[] = ['hash' => str_repeat(dechex($i), 40), 'title' => "t$i", 'resolution' => 1080, 'seeds' => 1, 'bytes' => 0];
+}
+check('nothing cached on Real-Debrid -> false', adultAddonDebridLink($many) === false);
+check("Real-Debrid is probed at most " . ADULT_ADDON_MAX_RD_PROBES . " times per lookup (was $rdCalls of " . count($many) . ' candidates)', $rdCalls === ADULT_ADDON_MAX_RD_PROBES);
+$usePremiumize = true; $useRealDebrid = false;
 
 // --- addon down: manifest unavailable -> false, no exception
 $adultAddonUrl = 'http://127.0.0.1:1/dead/manifest.json';

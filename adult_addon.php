@@ -27,6 +27,10 @@ const ADULT_ADDON_MANIFEST_TTL = 21600; // 6h
 const ADULT_ADDON_MAX_CATALOGS = 3;
 const ADULT_ADDON_MAX_METAS_PER_SEARCH = 4;
 const ADULT_ADDON_MAX_CANDIDATES = 8;
+// Real-Debrid has no cache-check API any more, so instantAvailability_RD()
+// finds out by adding the magnet, looking, and deleting it again - about five
+// API calls per candidate. Only the best few are worth that.
+const ADULT_ADDON_MAX_RD_PROBES = 3;
 const ADULT_ADDON_MIN_TITLE_SCORE = 0.5;
 
 // Base URL of the addon (everything before "/manifest.json"), or '' if unset.
@@ -365,6 +369,7 @@ function adultAddonDebridLink(array $candidates) {
             }
         }
     }
+    $rdProbes = 0;
     foreach ($candidates as $c) {
         if (!empty($useAllDebrid) && function_exists('allDebridResolveHash')) {
             $link = allDebridResolveHash($c['hash'], '', 'movies');
@@ -378,7 +383,8 @@ function adultAddonDebridLink(array $candidates) {
                 return $link;
             }
         }
-        if (!empty($useRealDebrid) && function_exists('instantAvailability_RD')) {
+        if (!empty($useRealDebrid) && $rdProbes < ADULT_ADDON_MAX_RD_PROBES && function_exists('instantAvailability_RD')) {
+            $rdProbes++;
             $link = instantAvailability_RD([['hash' => $c['hash'], 'extracted_title' => $c['title']]], 'adultAddon');
             if ($link) {
                 return $link;

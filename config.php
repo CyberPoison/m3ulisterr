@@ -206,9 +206,22 @@ $useTorBox = false;
 // title, this falls through to the next provider entirely rather than ever
 // using Premiumize. Only an explicit 0 here triggers this - a service simply
 // left out of this array is unaffected (still defaults to weight 50).
+//
+// Real-Debrid works like any other service here: give it a 'realdebrid'
+// weight. Two things are different about it. It has no cache-check API any
+// more, so AIOStreams' [RD⚡] "cached" tag is only a hint (about half of the
+// ones tagged cached turned out to be error placeholders when tested), and
+// the first request for a link takes ~25s to resolve - play.php waits for
+// that, and verifies every candidate before using it. And whichever service
+// is preferred, every service with cached candidates keeps a few guaranteed
+// slots in the list play.php verifies, so if the preferred one is down or
+// erroring the resolve falls over to the others instead of failing. A
+// service you don't list but AIOStreams returns (e.g. AllDebrid in a
+// Real-Debrid + Premiumize split like ['realdebrid' => 80, 'premiumize' => 20]) still takes part, at 50.
 $aioDebridWeights = [
     'alldebrid'  => 50,
     'premiumize' => 50,
+    'realdebrid' => 50,
 ];
 
 // maxResolution is the upper limit for video resolution preference in
@@ -299,9 +312,9 @@ $userDefinedOrder = [
 // Base URL of your AIOStreams instance (self-hosted via ElfHosted), including the
 // config token in the path (everything before "/manifest.json"). AIOStreams
 // aggregates many indexers and already resolves them through whichever debrid
-// service(s) are configured as providers on the AIOStreams side (AllDebrid and
-// Premiumize as of this writing - add more there as needed, no code change
-// required here). play.php queries its /stream/{type}/tmdb:... endpoint and
+// service(s) are configured as providers on the AIOStreams side (AllDebrid,
+// Premiumize and Real-Debrid are all supported - weight them with
+// $aioDebridWeights above; no code change required here). play.php queries its /stream/{type}/tmdb:... endpoint and
 // keeps only results whose real per-release audio-language tag matches what
 // was asked for: frenchAioStreams() for ?lang=fr, portugueseAioStreams() for
 // ?lang=pt, and defaultAioStreams() for every other language including the

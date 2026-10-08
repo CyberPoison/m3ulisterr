@@ -3575,6 +3575,49 @@ function aioPickWeightedService(array $candidates, array $weights) {
     return array_key_last($present); // float rounding fallback
 }
 
+// Picks which of the (already priority-sorted) candidates get verified: the
+// first $limit, EXCEPT that every debrid service with cached candidates is
+// guaranteed its own best $perServiceMin of them a slot. The sort order -
+// and with it the weighted service preference - is untouched; this only
+// decides who is in the window. Confirmed on a real Real-Debrid + Premiumize
+// AIOStreams instance: John Wick had 80 cached Premiumize candidates and
+// Oppenheimer 112, so on the ~20% of resolves where Premiumize was the drawn
+// preference, a plain top-15 slice was ALL Premiumize - and with Premiumize
+// answering every request with an error slate, not one Real-Debrid
+// candidate was ever tried and the resolve failed. Only CACHED candidates
+// are reserved: requesting a not-cached /playback/ link starts a download on
+// that account, so a service with nothing cached gets no extra slots.
+// Returns the chosen candidates in their original priority order.
+function aioPickVerificationWindow(array $sorted, $limit = 15, $perServiceMin = 3) {
+    if (count($sorted) <= $limit) {
+        return $sorted;
+    }
+
+    $keep = [];
+    $reserved = [];
+    foreach ($sorted as $i => $c) {
+        if (empty($c['cached'])) {
+            continue;
+        }
+        $service = aioCandidateService($c);
+        $reserved[$service] = $reserved[$service] ?? 0;
+        if ($reserved[$service] < $perServiceMin) {
+            $keep[$i] = true;
+            $reserved[$service]++;
+        }
+    }
+
+    foreach ($sorted as $i => $c) {
+        if (count($keep) >= $limit) {
+            break;
+        }
+        $keep[$i] = true;
+    }
+
+    ksort($keep);
+    return array_values(array_intersect_key($sorted, $keep));
+}
+
 // Wraps a resolved video URL through video_proxy.php so the SERVER fetches the
 // bytes instead of the client. Needed for AIOStreams links, which are locked to
 // whichever IP first resolved them (this server's), not the viewer's device.
@@ -3938,7 +3981,26 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     // generous top slice instead - large enough that a genuinely well-seeded
     // candidate is essentially never excluded by this, small enough to keep
     // resource usage sane.
-    $candidates = array_slice($candidates, 0, 15);
+    //
+    // Not a plain top-15 slice, though: see aioPickVerificationWindow() - a
+    // popular title can have 80+ cached candidates on ONE service, and if
+    // that service is the preferred one and is down, a plain slice would
+    // fill the whole window with dead links and never reach the other
+    // service at all.
+    $totalBeforeWindow = count($candidates);
+    $candidates = aioPickVerificationWindow($candidates, 15, 4);
+    if ($DEBUG) {
+        $windowMix = [];
+        foreach ($candidates as $wc) {
+            $key = aioCandidateService($wc) . ($wc['cached'] ? '(cached)' : '(not cached)');
+            $windowMix[$key] = ($windowMix[$key] ?? 0) + 1;
+        }
+        $mixText = [];
+        foreach ($windowMix as $key => $n) {
+            $mixText[] = "$key x$n";
+        }
+        echo 'Verifying ' . count($candidates) . ' of ' . $totalBeforeWindow . ' candidates: ' . implode(', ', $mixText) . '</br></br>';
+    }
 
     // Confirmed directly against a real request: AIOStreams' own /playback/
     // links are NOT guaranteed to actually work once resolved - one for a
@@ -3970,7 +4032,13 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     // tier/resolution priority order as before.
     $label = $languageName;
 
-    $batchResults = checkAioStreamsLinksPlayableBatch(array_column($candidates, 'url'));
+    $slowResolveUrls = [];
+    foreach ($candidates as $c) {
+        if (aioServiceResolvesSlowly($c['debrid'])) {
+            $slowResolveUrls[] = $c['url'];
+        }
+    }
+    $batchResults = checkAioStreamsLinksPlayableBatch(array_column($candidates, 'url'), $slowResolveUrls);
 
     // Parallel duration probes for every playable candidate up front, so the
     // per-candidate ffprobe wait no longer serializes (the main cause of slow
@@ -4112,12 +4180,13 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         // the HTTP response indefinitely. The torrent keeps downloading on
         // the debrid side regardless of whether this request waits it out; a
         // later retry lands on the now-cached instant path above instead.
-        $cachedInTime = waitForAioStreamsCachingCompletion($url, $bestByPeers['bitrateMbps'], 40, 5);
+        $bestIsSlow = aioServiceResolvesSlowly($bestByPeers['debrid']);
+        $cachedInTime = waitForAioStreamsCachingCompletion($url, $bestByPeers['bitrateMbps'], 40, 5, $bestIsSlow);
         $downloadedButRejected = false;
         if ($cachedInTime && $proxyMode) {
             // A freshly downloaded file needs the same default-audio proof as a
             // cached one before it goes to the player.
-            $recheck = checkAioStreamsLinksPlayableBatch([$url])[$url];
+            $recheck = checkAioStreamsLinksPlayableBatch([$url], $bestIsSlow ? [$url] : [])[$url];
             list($cachedInTime, $languageReason) = $recheck['ok']
                 ? proxyModeLanguageVerdict($recheck['finalUrl'], $bestByPeers['tier'], $languageName)
                 : [false, $recheck['reason']];
@@ -4160,11 +4229,11 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
 // failure, since retrying those would just waste the wait budget on
 // something that was never going to start working regardless of how long
 // this waits.
-function waitForAioStreamsCachingCompletion($url, $declaredBitrateMbps, $maxWaitSeconds, $pollIntervalSeconds) {
+function waitForAioStreamsCachingCompletion($url, $declaredBitrateMbps, $maxWaitSeconds, $pollIntervalSeconds, $slowResolve = false) {
     $elapsed = 0;
 
     while (true) {
-        $check = checkAioStreamsLinksPlayableBatch([$url])[$url];
+        $check = checkAioStreamsLinksPlayableBatch([$url], $slowResolve ? [$url] : [])[$url];
 
         if ($check['ok'] && isAioStreamsLinkDurationOk($check['finalUrl'])) {
             $throughputMbps = measureAioStreamsThroughputMbps($check['finalUrl']);
@@ -4203,7 +4272,10 @@ function waitForAioStreamsCachingCompletion($url, $declaredBitrateMbps, $maxWait
 // the duration check (see isAioStreamsLinkDurationOk()) - that one still
 // runs sequentially, but only for whichever candidate the caller actually
 // wants to try, not every candidate up front.
-function checkAioStreamsLinksPlayableBatchOnce(array $urls) {
+//
+// $timeouts maps url => seconds for the urls that need more than
+// $defaultTimeout (see aioServiceResolvesSlowly()).
+function checkAioStreamsLinksPlayableBatchOnce(array $urls, array $timeouts = [], $defaultTimeout = 12) {
     $mh = curl_multi_init();
     $handles = [];
     $totalSizes = [];
@@ -4213,7 +4285,7 @@ function checkAioStreamsLinksPlayableBatchOnce(array $urls) {
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_MAXREDIRS, 10);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 12);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $timeouts[$url] ?? $defaultTimeout);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
         curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0');
@@ -4252,7 +4324,17 @@ function checkAioStreamsLinksPlayableBatchOnce(array $urls) {
         $transient = false;
         $reason = '';
 
-        if ($body === false || $httpCode >= 400) {
+        // $httpCode === 0 has to be tested explicitly: with curl_multi a
+        // transfer that times out before ANY response arrives does not make
+        // curl_multi_getcontent() return false - it returns an empty string
+        // (confirmed directly), with http code 0 and no content-type. That
+        // used to fall through every branch below and leave $ok true with the
+        // still-unresolved /playback/ url as its "final" url, so the caller
+        // went on to measure throughput against a link that had never
+        // answered and rejected it as "too slow" (0 Mbps) - invisible for
+        // AllDebrid/Premiumize, which answer well inside the timeout, but
+        // fatal for RealDebrid, whose first resolve of a link takes ~25s.
+        if ($body === false || $httpCode === 0 || $httpCode >= 400) {
             $ok = false;
             // 4xx is a real rejection (bad/expired link); 5xx and 0 (curl
             // never got a response at all - timeout, connection reset) are
@@ -4271,13 +4353,17 @@ function checkAioStreamsLinksPlayableBatchOnce(array $urls) {
             // won't change it, so not marked transient.
             $ok = false;
             $reason = "slate.elfhosted.com redirect - finalUrl=$finalUrl";
-        } elseif (!empty($contentType) && stripos($contentType, 'video/') === false && stripos($contentType, 'application/octet-stream') === false) {
+        } elseif (!empty($contentType) && stripos($contentType, 'video/') === false && stripos($contentType, 'application/octet-stream') === false && stripos($contentType, 'application/force-download') === false) {
             // A real video response is either a real video/* content-type,
             // or (for a range request against a server that doesn't echo one
             // back) at least a binary-looking payload - the slate error
             // response is HTML/JSON regardless of what content-type it
             // claims, so this catches variants of the same failure that
             // don't happen to redirect through that exact host.
+            // application/force-download is what Real-Debrid's CDN labels
+            // every file it serves (confirmed on real *.download.real-
+            // debrid.com responses) - a generic binary type like
+            // octet-stream, never used for an error body.
             $ok = false;
             $reason = "content-type - httpCode=$httpCode, contentType=$contentType, finalUrl=$finalUrl";
         } elseif (empty($contentType) && $httpCode >= 300 && $httpCode < 400) {
@@ -4313,24 +4399,47 @@ function checkAioStreamsLinksPlayableBatchOnce(array $urls) {
 // retried - retrying instantly wouldn't change that answer and would only
 // slow the batch down for candidates that were correctly rejected the first
 // time.
-function checkAioStreamsLinksPlayableBatch(array $urls) {
-    $results = checkAioStreamsLinksPlayableBatchOnce($urls);
+//
+// $slowResolveUrls are the urls of candidates from a service whose FIRST
+// resolve is slow (see aioServiceResolvesSlowly()). The first pass times
+// them out like everyone else, but that request is what starts the resolve
+// on AIOStreams' side and it keeps running after we hang up, so the retry -
+// given the longer $slowRetryTimeout instead of $timeout - collects the
+// finished result (a repeat hit then answers in about a second).
+function checkAioStreamsLinksPlayableBatch(array $urls, array $slowResolveUrls = [], $timeout = 12, $slowRetryTimeout = 25) {
+    $results = checkAioStreamsLinksPlayableBatchOnce($urls, [], $timeout);
 
     $retryUrls = [];
+    $retryTimeouts = [];
     foreach ($results as $url => $r) {
         if (!$r['ok'] && $r['transient']) {
             $retryUrls[] = $url;
+            if (in_array($url, $slowResolveUrls, true)) {
+                $retryTimeouts[$url] = $slowRetryTimeout;
+            }
         }
     }
 
     if (!empty($retryUrls)) {
-        $retryResults = checkAioStreamsLinksPlayableBatchOnce($retryUrls);
+        $retryResults = checkAioStreamsLinksPlayableBatchOnce($retryUrls, $retryTimeouts, $timeout);
         foreach ($retryResults as $url => $r) {
             $results[$url] = $r;
         }
     }
 
     return $results;
+}
+
+// Debrid services (the short code in AIOStreams' "[RD⚡]" stream-name tag)
+// whose /playback/ link takes far longer than the others to answer the very
+// first time it is requested. Measured directly on real Real-Debrid links via
+// AIOStreams: the first hit took ~25s before redirecting to the CDN (a
+// repeat hit 0.3-3s), because AIOStreams has to add the magnet, select the
+// file and unrestrict the link through several Real-Debrid API calls;
+// AllDebrid and Premiumize answer inside the normal 12s budget. These get the
+// longer retry window in checkAioStreamsLinksPlayableBatch().
+function aioServiceResolvesSlowly($debridCode) {
+    return strtoupper((string) $debridCode) === 'RD';
 }
 
 // Confirmed directly: some AIOStreams links pass every check in

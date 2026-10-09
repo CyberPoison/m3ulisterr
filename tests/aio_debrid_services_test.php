@@ -35,7 +35,7 @@ function grabFunction($src, $name) {
     exit(2);
 }
 foreach ([
-    'aioCandidateService', 'aioAudioCompatRank', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
+    'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
     'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk',
 ] as $fn) {
@@ -94,6 +94,16 @@ check('audio: no field -> filename decides (DTS-HDMA remux = 2, x264 AC3 = 0, DD
     && aioAudioCompatRank('', 'John.Wick.Chapter.2.2017.MULTi-VF2.1080p.BluRay.x264.AC3-JAQC.mkv') === 0
     && aioAudioCompatRank('', 'Movie.2020.1080p.WEB-DL.DDP5.1.H264.mkv') === 1
     && aioAudioCompatRank('', 'Movie.2020.1080p.mkv') === 1);
+
+// ---------------------------------------------------------------- video weight
+check('video: 2160p is heavy, 1080p/720p x264 is not', aioVideoIsHeavy(2160, 'Movie.2020.mkv') && !aioVideoIsHeavy(1080, 'Movie.2020.1080p.BluRay.x264.mkv') && !aioVideoIsHeavy(720, 'Movie.720p.mkv'));
+check('video: 10-bit / HDR / Dolby Vision in the filename are heavy even at 1080p',
+    aioVideoIsHeavy(1080, 'Spider-Man Homecoming 2017 BR EAC3 VFF VFQ VO 1080p x265 10Bits T0M.mkv')
+    && aioVideoIsHeavy(1080, 'Movie.2020.1080p.UHD.BluRay.DV.HDR10.x265.mkv') && aioVideoIsHeavy(1080, 'Movie 1080p DOLBY VISION x265.mkv')
+    && aioVideoIsHeavy(1080, 'Movie.1080p.Hi10P.mkv'));
+check('video: the description visual line counts too, and SDR does not', aioVideoIsHeavy(1080, 'Movie.mkv', "\u{1F4FA} HDR10 | HDR \u{1F3A7} DD") && !aioVideoIsHeavy(1080, 'Movie.mkv', "\u{1F4FA} SDR \u{1F3A7} DD+"));
+check('video: ordinary releases (x265 8-bit 1080p, WEB-DL, REMUX AVC) are not heavy',
+    !aioVideoIsHeavy(1080, 'Movie.2020.1080p.WEB-DL.DDP5.1.H264-GRP.mkv') && !aioVideoIsHeavy(1080, 'Movie.2020.1080p.BluRay.REMUX.AVC.DTS-HD.MA.mkv'));
 
 // ---------------------------------------------------------------- verification window
 $pmFirst = [];

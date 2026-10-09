@@ -3530,6 +3530,24 @@ function candidateQualityRank($resolution, $codec, $scheme) {
     return 6;
 }
 
+// True for releases most Android/TV boxes cannot decode smoothly (or at all):
+// 4K, 10-bit, HDR or Dolby Vision video. The resolver's player-facing paths
+// either pass the video through untouched (French) or stream-copy it into
+// HLS (English), so the player has to decode exactly this file - reported as
+// "Source Error" in iMPlayer on Toy Story 3, Spider-Man: Homecoming and
+// Fantastic Beasts 2. $description is the AIOStreams text (its "📺" line lists
+// HDR/DV/SDR), $filename the release name.
+function aioVideoIsHeavy($resolution, $filename, $description = '') {
+    if ((int) $resolution >= 2160) {
+        return true;
+    }
+    $visual = '';
+    if (preg_match('/\x{1F4FA}\s*([^\n\x{1F3A7}]*)/u', (string) $description, $m)) {
+        $visual = $m[1];
+    }
+    return (bool) preg_match('/\b10[ ._-]?bits?\b|\bhi10p?\b|\bHDR(10\+?)?\b|\bHLG\b|\bDV\b|\bDoVi\b|dolby[ ._-]?vision|\b4K\b|\bUHD\b/i', $filename . ' ' . $visual);
+}
+
 // How widely playable a candidate's audio is, from the "🎧" field of the
 // AIOStreams description (e.g. "🎧 DD+ | AAC | DD 🔊 7.1 | 2.0" - one entry
 // per track) or, when that field is absent, the release filename.
@@ -3928,6 +3946,7 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
             'filename' => $releaseFilename,
             'audioLangs' => $audioLanguages,
             'audioCompat' => aioAudioCompatRank($description, $releaseFilename),
+            'videoHeavy' => aioVideoIsHeavy($resolution, $releaseFilename, $description),
         ];
     }
 
@@ -4017,6 +4036,14 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         if ($proxyMode && $a['cached'] && $b['cached'] && $a['audioCompat'] !== $b['audioCompat']
             && ($a['audioCompat'] >= 2 || $b['audioCompat'] >= 2)) {
             return $a['audioCompat'] <=> $b['audioCompat'];
+        }
+        // Same idea for the video: 4K / 10-bit / HDR / Dolby Vision files go
+        // behind ordinary ones, ahead of the service weighting (a stream that
+        // cannot be decoded is worse than a skipped quota split). Cached
+        // candidates only, demote-only: a title whose only cached copy is 4K
+        // still plays it. ?codec=x265 means the viewer's player handles HEVC.
+        if ($scheme !== 'x265' && $a['cached'] && $b['cached'] && $a['videoHeavy'] !== $b['videoHeavy']) {
+            return ($a['videoHeavy'] ? 1 : 0) <=> ($b['videoHeavy'] ? 1 : 0);
         }
         if ($a['cached'] && $preferredService !== null) {
             $aPreferred = (aioCandidateService($a) === $preferredService) ? 0 : 1;

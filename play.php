@@ -3641,6 +3641,15 @@ function wrapWithVideoProxy($url) {
 // byte passthrough (frenchAioStreams): candidates are sanity-checked by file
 // size instead of an ffprobe run, so resolving never touches ffmpeg.
 function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false) {
+    // Debug-only phase clock: "[+12.3s] label" lines in the &dev=true trace, so a slow
+    // resolve can be attributed to the catalog fetch, the link verification or the
+    // per-candidate checks instead of guessed at.
+    $aioClock = microtime(true);
+    $aioTick = function ($label) use ($aioClock) {
+        if (!empty($GLOBALS['DEBUG'])) {
+            echo sprintf('[+%.1fs] ', microtime(true) - $aioClock) . $label . '</br></br>';
+        }
+    };
     global $DEBUG, $logTitle, $type, $seasonNoPad, $episodeNoPad, $frenchAioStreamsUrl, $requestedResolutionCodec, $aioDebridWeights;
     // Older config.php files predate $aioDebridWeights - default to an empty
     // array (aioPickWeightedService() then falls back to 50/50 per service)
@@ -3662,6 +3671,7 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     }
 
     $response = fetchAioStreamsList($streamUrl);
+    $aioTick('catalog fetched (' . ($response === false ? 'failed' : strlen($response) . ' bytes') . ')');
 
     if ($response === false) {
         if ($DEBUG) {
@@ -4038,7 +4048,9 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
             $slowResolveUrls[] = $c['url'];
         }
     }
+    $aioTick('verifying ' . count($candidates) . ' candidate links (' . count($slowResolveUrls) . ' slow-resolve)');
     $batchResults = checkAioStreamsLinksPlayableBatch(array_column($candidates, 'url'), $slowResolveUrls);
+    $aioTick('link verification done: ' . count(array_filter($batchResults, function ($r) { return $r['ok']; })) . ' ok, ' . count(array_filter($batchResults, function ($r) { return !$r['ok']; })) . ' rejected');
 
     // Parallel duration probes for every playable candidate up front, so the
     // per-candidate ffprobe wait no longer serializes (the main cause of slow
@@ -4087,6 +4099,7 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         // dropped for a 2 MB header read rather than a full measurement.
         if ($proxyMode) {
             list($languageOk, $languageReason) = proxyModeLanguageVerdict($check['finalUrl'], $candidate['tier'], $languageName);
+            $aioTick('audio-track check done for ' . $candidate['debrid'] . ' candidate');
             if ($DEBUG) {
                 echo ($languageOk ? 'Audio check passed' : 'Rejected (wrong default audio language)') . " for $label candidate via $tSite: $languageReason - $url</br></br>";
             }
@@ -4095,6 +4108,7 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
             }
         }
 
+        $aioTick('throughput probe starting for ' . $candidate['debrid'] . ' candidate');
         $throughputMbps = measureAioStreamsThroughputMbps($check['finalUrl']);
         if (!isAioStreamsThroughputOk($throughputMbps, $candidate['bitrateMbps'])) {
             if ($DEBUG) {

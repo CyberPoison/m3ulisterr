@@ -35,7 +35,7 @@ function grabFunction($src, $name) {
     exit(2);
 }
 foreach ([
-    'aioCandidateService', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
+    'aioCandidateService', 'aioAudioCompatRank', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
     'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk',
 ] as $fn) {
@@ -79,6 +79,21 @@ for ($i = 0; $i < 20000; $i++) {
 }
 check('AD left out of the weights defaults to 50 and still takes part (AD ~33%, RD ~53%, PM ~13%)',
     abs($counts['alldebrid'] / 200 - 33.3) < 2.5 && abs($counts['realdebrid'] / 200 - 53.3) < 2.5 && abs($counts['premiumize'] / 200 - 13.3) < 2.5);
+
+// ---------------------------------------------------------------- audio compatibility
+$d = fn($audio) => "\u{1F3A5} BluRay \u{1F39E}\u{FE0F} AVC\n\u{1F3A7} $audio \u{1F50A} 5.1\n\u{1F4E6} 9 GB (12 Mbps)";
+check('audio: AAC / DD (AC3) are rank 0', aioAudioCompatRank($d('AAC')) === 0 && aioAudioCompatRank($d('DD')) === 0);
+check('audio: DD+ and plain DTS are rank 1', aioAudioCompatRank($d('DD+')) === 1 && aioAudioCompatRank($d('DTS')) === 1);
+check('audio: DTS-HD MA / TrueHD / Atmos / PCM are rank 2',
+    aioAudioCompatRank($d('DTS-HD MA')) === 2 && aioAudioCompatRank($d('TrueHD')) === 2
+    && aioAudioCompatRank($d('Atmos')) === 2 && aioAudioCompatRank($d('PCM')) === 2);
+check('audio: a multi-track release takes its most compatible track (TrueHD | DD -> 0; DD+ | AAC | DD -> 0)',
+    aioAudioCompatRank($d('TrueHD | DD')) === 0 && aioAudioCompatRank($d('DD+ | AAC | DD')) === 0 && aioAudioCompatRank($d('TrueHD | Atmos')) === 2);
+check('audio: no field -> filename decides (DTS-HDMA remux = 2, x264 AC3 = 0, DDP = 1, nothing = 1)',
+    aioAudioCompatRank('', 'John.Wick.Chapter.2.2017.MULTI.VFF.1080p.BluRay.REMUX.AVC.DTS-HDMA.5.1-ROMK.mkv') === 2
+    && aioAudioCompatRank('', 'John.Wick.Chapter.2.2017.MULTi-VF2.1080p.BluRay.x264.AC3-JAQC.mkv') === 0
+    && aioAudioCompatRank('', 'Movie.2020.1080p.WEB-DL.DDP5.1.H264.mkv') === 1
+    && aioAudioCompatRank('', 'Movie.2020.1080p.mkv') === 1);
 
 // ---------------------------------------------------------------- verification window
 $pmFirst = [];

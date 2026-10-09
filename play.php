@@ -3530,6 +3530,53 @@ function candidateQualityRank($resolution, $codec, $scheme) {
     return 6;
 }
 
+// How widely playable a candidate's audio is, from the "🎧" field of the
+// AIOStreams description (e.g. "🎧 DD+ | AAC | DD 🔊 7.1 | 2.0" - one entry
+// per track) or, when that field is absent, the release filename.
+//   0 = AAC / Dolby Digital (AC3) / Opus / MP3: decoded by practically every player
+//   1 = Dolby Digital Plus (E-AC3) / plain DTS: works on many, silent on some
+//   2 = DTS-HD MA / TrueHD / Atmos-only / PCM: needs a passthrough or a licensed decoder;
+//       a very common cause of "picture but no sound" in IPTV apps
+// The best entry wins, because a multi-audio release nearly always carries
+// one plain AC3/AAC track the player can fall back on. Unknown -> 1.
+function aioAudioCompatRank($description, $filename = '') {
+    $field = '';
+    if (preg_match('/\x{1F3A7}\s*([^\n\x{1F50A}]*)/u', (string) $description, $m)) {
+        $field = $m[1];
+    }
+    $tokens = array_filter(array_map('trim', explode('|', $field)), 'strlen');
+    $rank = null;
+    foreach ($tokens as $t) {
+        $t = strtoupper($t);
+        if (strpos($t, 'DTS-HD') !== false || strpos($t, 'DTS:X') !== false || strpos($t, 'TRUEHD') !== false || $t === 'PCM' || $t === 'FLAC') {
+            $r = 2;
+        } elseif ($t === 'ATMOS') {
+            $r = 2;
+        } elseif (strpos($t, 'DD+') !== false || strpos($t, 'EAC3') !== false || strpos($t, 'E-AC3') !== false || strpos($t, 'DTS') !== false) {
+            $r = 1;
+        } elseif (in_array($t, ['AAC', 'DD', 'AC3', 'OPUS', 'MP3'], true)) {
+            $r = 0;
+        } else {
+            $r = 1;
+        }
+        $rank = ($rank === null) ? $r : min($rank, $r);
+    }
+    if ($rank !== null) {
+        return $rank;
+    }
+    $f = strtoupper((string) $filename);
+    if (preg_match('/DTS[-. ]?HD|TRUEHD|ATMOS|\bFLAC\b/', $f)) {
+        return 2;
+    }
+    if (preg_match('/DDP|DD\+|E-?AC-?3|\bDTS\b/', $f)) {
+        return 1;
+    }
+    if (preg_match('/\bAAC|\bAC-?3\b|\bDD[. ]?[257]/', $f)) {
+        return 0;
+    }
+    return 1;
+}
+
 // Normalizes a candidate's short debrid tag ('AD', 'PM', ...) to the same
 // lowercase key $aioDebridWeights (config.php) is keyed by.
 function aioCandidateService($candidate) {
@@ -3880,6 +3927,7 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
             'debrid' => $debridService,
             'filename' => $releaseFilename,
             'audioLangs' => $audioLanguages,
+            'audioCompat' => aioAudioCompatRank($description, $releaseFilename),
         ];
     }
 
@@ -3951,7 +3999,7 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     // preference. When the preference doesn't distinguish two candidates
     // (same service, or none configured), tier then quality decide exactly
     // as before - the weight only jumps the tier queue, it doesn't erase it.
-    usort($candidates, function ($a, $b) use ($scheme, $preferredService) {
+    usort($candidates, function ($a, $b) use ($scheme, $preferredService, $proxyMode) {
         $aMatched = $a['tier'] <= 2 ? 0 : 1;
         $bMatched = $b['tier'] <= 2 ? 0 : 1;
         if ($aMatched !== $bMatched) {
@@ -3959,6 +4007,16 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         }
         if ($a['cached'] !== $b['cached']) {
             return ($b['cached'] ? 1 : 0) <=> ($a['cached'] ? 1 : 0);
+        }
+        // Raw-passthrough (French) streams reach the player with their
+        // original audio, so a DTS-HD / TrueHD / Atmos-only release plays
+        // silent in apps that cannot decode it (reported: John Wick 1 and 2
+        // on UnlimitedFR, no sound in MyTVOnline3). Ahead of the service
+        // preference on purpose - a silent movie is worse than a skipped
+        // quota split. The English path re-encodes to AAC, so it is exempt.
+        if ($proxyMode && $a['cached'] && $b['cached'] && $a['audioCompat'] !== $b['audioCompat']
+            && ($a['audioCompat'] >= 2 || $b['audioCompat'] >= 2)) {
+            return $a['audioCompat'] <=> $b['audioCompat'];
         }
         if ($a['cached'] && $preferredService !== null) {
             $aPreferred = (aioCandidateService($a) === $preferredService) ? 0 : 1;

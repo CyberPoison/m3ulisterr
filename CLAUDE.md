@@ -441,6 +441,7 @@ one in a later session:
 0. Tests for the availability endpoint: `php tests/aio_availability_test.php` (unit) and `bash tests/aio_availability_e2e.sh` (real `player_api.php` against `tests/mock_aiostreams.php`, incl. throttle/degraded/series/budget cases) - run both after touching `aio_availability.php` or its `player_api.php` action.
 0b. Tests for the adult addon: `php tests/adult_addon_test.php` (unit + mock Stremio addon in `tests/mock_adult_addon.php`) - run after touching `adult_addon.php` or the `playAdultVideo()` addon block.
 0c. Tests for the debrid services behind AIOStreams (AllDebrid / Premiumize / Real-Debrid): `php tests/aio_debrid_services_test.php` (pulls the real functions out of `play.php` and runs them against `tests/mock_aio_playback.php`) - run after touching the playability check, `aioPickWeightedService()` or `aioPickVerificationWindow()`.
+0d. Test for the HLS segment retry: `php tests/hls_segment_retry_test.php` (needs ffmpeg) - run after touching `runFragmentedMp4Segment()` in `hls_shared.php`.
 1. Local working copy is never a git repo and never gets secrets stripped —
    it's the developer's real, working install.
 2. Public repo `config.php` secrets must always stay blank; port

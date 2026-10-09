@@ -839,7 +839,32 @@ function hlsVideoRangeFromColorTransfer($colorTransfer) {
 // back this SPECIFIC request's own diagnostic output (the shared log is
 // written by many concurrent requests at once, so there's no reliable way to
 // isolate one request's lines out of it after the fact).
+// Runs the segment ffmpeg and retries ONCE when it produced nothing usable.
+// A cold first segment against a debrid link regularly fails the first time
+// (the debrid service is still resolving the file, or a burst of parallel
+// opens of the same link from the init + segment requests gets throttled for
+// a moment) and succeeds a second later - measured on production: a cold
+// English Finding Nemo answered 5XX on its first audio segment, then 200
+// with no change. Without the retry the player gets the 502 and reports
+// "Source Error". A client that went away, or ffmpeg that cannot start at
+// all, is never retried.
 function runFragmentedMp4Segment($cmd, $rawTmpPath, $ffmpegLogPath, $stderrCapturePath = null) {
+    $result = runFragmentedMp4SegmentOnce($cmd, $rawTmpPath, $ffmpegLogPath, $stderrCapturePath);
+    if ($result['fragment'] !== false || in_array($result['outcome'], ['client_aborted', 'ffmpeg_start_failed'], true)) {
+        return $result;
+    }
+    usleep(1000000);
+    if (connection_aborted()) {
+        return $result;
+    }
+    $retry = runFragmentedMp4SegmentOnce($cmd, $rawTmpPath, $ffmpegLogPath, $stderrCapturePath);
+    if ($retry['fragment'] === false) {
+        $retry['outcome'] = $result['outcome'] . '_retry_' . $retry['outcome'];
+    }
+    return $retry;
+}
+
+function runFragmentedMp4SegmentOnce($cmd, $rawTmpPath, $ffmpegLogPath, $stderrCapturePath = null) {
     $descriptorSpec = [
         0 => ['pipe', 'r'],
         1 => ['file', $ffmpegLogPath, 'a'],

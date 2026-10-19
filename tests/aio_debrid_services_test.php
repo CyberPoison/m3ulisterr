@@ -326,5 +326,17 @@ file_put_contents(adultEmbedCachePath($srcUrl), 'not json');
 check('embed cache: a corrupt file is ignored', adultEmbedCacheRead($srcUrl) === []);
 @unlink(adultEmbedCachePath($srcUrl));
 
+
+// ---------------------------------------------------------------- video_proxy link check: asks the upstream directly, never itself
+$pData = fn($upstreamAndHeaders) => 'video_proxy.php?data=' . base64_encode($upstreamAndHeaders);
+check('proxy link (data=base64(url|headers)): live upstream is alive', checkVideoProxyUpstreamAlive($pData($u('/fast') . "|Referer='https://x/'")) === true);
+check('proxy link: upstream 404 is dead', checkVideoProxyUpstreamAlive($pData($u('/e404'))) === false);
+check('proxy link: a web page where a video should be is dead', checkVideoProxyUpstreamAlive($pData($u('/htmlpage'))) === false);
+check('proxy link: the Referer in the link is sent (upstream answers 403 without it)',
+    checkVideoProxyUpstreamAlive($pData($u('/needs_referer') . "|Referer='https://ref.example/'")) === true && checkVideoProxyUpstreamAlive($pData($u('/needs_referer'))) === false);
+$wrapped = wrapWithVideoProxy($u('/fast'));
+check('proxy link (wrapWithVideoProxy form url=...&auto=1&data=|): live is alive, 404 is dead', checkVideoProxyUpstreamAlive($wrapped) === true && checkVideoProxyUpstreamAlive(wrapWithVideoProxy($u('/e404'))) === false);
+check('proxy link: unreadable / non-http content is not condemned', checkVideoProxyUpstreamAlive('video_proxy.php?data=' . base64_encode('ftp://x/y')) === true && checkVideoProxyUpstreamAlive('video_proxy.php') === true);
+
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

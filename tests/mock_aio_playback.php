@@ -76,6 +76,21 @@ if ($path === '/flaky525') {
     exit;
 }
 
+// /htmlpage: 200 text/html (a web page where a video should be); /needs_referer: 403 unless Referer is https://ref.example/
+if ($path === '/htmlpage') {
+    header('Content-Type: text/html');
+    echo '<html>not a video</html>';
+    exit;
+}
+if ($path === '/needs_referer') {
+    if (($_SERVER['HTTP_REFERER'] ?? '') !== 'https://ref.example/') {
+        http_response_code(403);
+        exit;
+    }
+    mockCdn('video/mp4');
+    exit;
+}
+
 switch ($path) {
     case '/fast':
         header('Location: ' . $base . '/cdn/video.mp4', true, 307);

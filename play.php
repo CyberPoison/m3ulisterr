@@ -2723,30 +2723,69 @@ function torrentSites($movieId, $imdbId, $title, $year = null)
 // video_proxy.php is a cheap, accurate stand-in for actually trying to play
 // the link, reusing that exact logic instead of duplicating it here.
 function checkVideoProxyUpstreamAlive($proxyUrl) {
-    $absoluteUrl = (stripos($proxyUrl, 'http://') === 0 || stripos($proxyUrl, 'https://') === 0)
-        ? $proxyUrl
-        : locateBaseURL() . $proxyUrl;
+    // The upstream link and its headers are INSIDE the proxy url (data=base64("<url>|Header=Value|..."),
+    // or url=<url>&data=base64("|Header=Value...")), so the check reads them from there and asks the
+    // upstream itself, directly.
+    //
+    // It used to send a HEAD to this server's OWN public address (locateBaseURL() . 'video_proxy.php...').
+    // On the production host a container calling its own public IP does not reach itself - the answer is
+    // a 404 from another listener (measured: the video_proxy relay got 404 for http://<server ip>/ while
+    // the same url answers from outside) - so that check said "dead" for EVERY video_proxy link:
+    // every adult MixDrop link was rejected after a perfectly good extraction, and every cached
+    // UnlimitedFR link was thrown away and re-resolved on each play.
+    parse_str((string) parse_url($proxyUrl, PHP_URL_QUERY), $q);
+    $decoded = isset($q['data']) ? base64_decode((string) $q['data']) : '';
+    $parts = $decoded === '' ? [] : explode('|', $decoded);
+    if (!empty($q['url'])) {
+        $upstream = (string) $q['url'];
+    } else {
+        $upstream = (string) array_shift($parts);
+    }
+    if (!preg_match('#^https?://#i', $upstream)) {
+        return true; // not something this check can read: do not condemn it
+    }
+    $headers = [];
+    foreach ($parts as $headerData) {
+        if (strpos($headerData, '=') !== false) {
+            list($name, $value) = explode('=', $headerData, 2);
+            $headers[] = trim($name) . ': ' . trim($value, "'\"");
+        }
+    }
 
-    $ch = curl_init($absoluteUrl);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_NOBODY, true);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'HEAD');
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+    // AIOStreams /playback/ links: the resolver's own definitive-answers-only check.
+    if (stripos($upstream, 'aiostreams') !== false || stripos($upstream, 'elfhosted') !== false) {
+        return aioCachedSourceStillAlive($upstream);
+    }
 
-    $response = curl_exec($ch);
-    $httpStatus = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $ch = curl_init($upstream);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 6,
+        CURLOPT_TIMEOUT => 12,
+        CURLOPT_CONNECTTIMEOUT => 6,
+        CURLOPT_RANGE => '0-1023',
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0',
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+    ]);
+    $body = curl_exec($ch);
+    $httpStatus = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $contentType = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
     curl_close($ch);
 
-    if ($response === false || $httpStatus >= 400) {
-        if ($GLOBALS['DEBUG']) {
-            echo 'Link Checker - video_proxy.php upstream check returned status ' . $httpStatus . '.</br></br>';
+    // A timeout / connection problem proves nothing (the link may just be slow): only a
+    // definitive answer condemns it - an HTTP error, or a web page instead of a video.
+    if ($body === false || $httpStatus === 0) {
+        return true;
+    }
+    if ($httpStatus >= 400 || stripos($contentType, 'text/html') !== false) {
+        if (!empty($GLOBALS['DEBUG'])) {
+            echo 'Link Checker - upstream of the proxy link answered ' . $httpStatus . ' (' . htmlspecialchars($contentType) . ').</br></br>';
         }
         return false;
     }
-
     return true;
 }
 

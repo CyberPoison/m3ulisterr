@@ -395,6 +395,13 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
 
             // Iterate through the user-defined order and execute functions accordingly
             foreach ($runOrder as $functionName) {
+                // Time budget: a player waits ~1 minute at most. A resolve that
+                // already spent 75s (AIOStreams catalog stall + link checks) is not
+                // going to be saved by the remaining slow scrapers - they ran for
+                // ~2.5 more minutes and ended in the "not available" notice anyway.
+                if (!$GLOBALS['DEBUG'] && isset($_SERVER['REQUEST_TIME_FLOAT']) && microtime(true) - $_SERVER['REQUEST_TIME_FLOAT'] > 75) {
+                    break;
+                }
                 if (in_array($functionName, $predefinedFunctions) && function_exists($functionName)) {
 
                     // Check if Stremio Sites should run.
@@ -577,7 +584,7 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
                 }
             }
 			if (!$GLOBALS['DEBUG']) {
-				writeToCache($key, '_failed_', '3600', false);
+				writeToCache($key, '_failed_', '180', false);
 				m3uServeUnavailableNotice(); // exits
 			 }
             http_response_code(404);
@@ -590,7 +597,7 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
                 echo 'TMDB Response: ' . htmlspecialchars($response) . "</br></br>";
             }
 			if (!$GLOBALS['DEBUG']) {
-				writeToCache($key, '_failed_', '3600', false);
+				writeToCache($key, '_failed_', '180', false);
 				m3uServeUnavailableNotice(); // exits
 			 }
             http_response_code(404);
@@ -602,7 +609,7 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
             echo 'Error: Unable to retrieve movie details.' . "</br></br>";
         }
 		if (!$GLOBALS['DEBUG']) {
-			writeToCache($key, '_failed_', '3600', false);
+			writeToCache($key, '_failed_', '180', false);
 			m3uServeUnavailableNotice(); // exits
 		}
         http_response_code(404);
@@ -726,6 +733,13 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
 
             // Iterate through the user-defined order and execute functions accordingly
             foreach ($runOrder as $functionName) {
+                // Time budget: a player waits ~1 minute at most. A resolve that
+                // already spent 75s (AIOStreams catalog stall + link checks) is not
+                // going to be saved by the remaining slow scrapers - they ran for
+                // ~2.5 more minutes and ended in the "not available" notice anyway.
+                if (!$GLOBALS['DEBUG'] && isset($_SERVER['REQUEST_TIME_FLOAT']) && microtime(true) - $_SERVER['REQUEST_TIME_FLOAT'] > 75) {
+                    break;
+                }
                 if (in_array($functionName, $predefinedFunctions) && function_exists($functionName)) {
 
                     // Check if Stremio Sites should run.
@@ -892,7 +906,7 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
                 }
             }
 			if (!$GLOBALS['DEBUG']) {
-				writeToCache($key, '_failed_', '3600', false);
+				writeToCache($key, '_failed_', '180', false);
 				m3uServeUnavailableNotice(); // exits
 			}
             http_response_code(404);
@@ -905,7 +919,7 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
                 echo 'TMDB Response: ' . htmlspecialchars($response) . "</br></br>";
             }
 			if (!$GLOBALS['DEBUG']) {
-				writeToCache($key, '_failed_', '3600', false);
+				writeToCache($key, '_failed_', '180', false);
 				m3uServeUnavailableNotice(); // exits
 			}
             http_response_code(404);
@@ -917,7 +931,7 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
             echo 'Error: Unable to retrieve movie details.' . "</br></br>";
         }
 		if (!$GLOBALS['DEBUG']) {
-			writeToCache($key, '_failed_', '3600', false);
+			writeToCache($key, '_failed_', '180', false);
 			m3uServeUnavailableNotice(); // exits
 		}
         http_response_code(404);
@@ -2594,6 +2608,26 @@ function checkVideoProxyUpstreamAlive($proxyUrl) {
     return true;
 }
 
+// Is the AIOStreams /playback/ link inside a cached HLS entry still usable?
+// A direct 2 KB ranged GET from this server (the IP the link is locked to) -
+// the same cheap check the resolver itself uses - and a link is only called
+// DEAD on a DEFINITIVE answer (slate redirect, 4xx, non-video body). A timeout
+// or 5xx proves nothing (a Real-Debrid link answers its first request after a
+// while in ~25s) and counts as alive: the first version of this check went
+// through video_proxy.php, which made a second cold resolve of the same link,
+// blew its 15s budget and condemned LIVE links - every play became a full
+// re-resolve (30s+ spinner on the TV).
+function aioCachedSourceStillAlive($sourceUrl) {
+    $r = checkAioStreamsLinksPlayableBatchOnce([$sourceUrl], [], 8)[$sourceUrl] ?? null;
+    if ($r === null || $r['ok'] || !empty($r['transient'])) {
+        return true;
+    }
+    if (!empty($GLOBALS['DEBUG'])) {
+        echo 'Cached HLS source is dead: ' . htmlspecialchars((string) $r['reason']) . '</br></br>';
+    }
+    return false;
+}
+
 // Liveness check for a link read back from the CACHE (not for a fresh result).
 // A cached HLS entry (subtitle_track_playlist.m3u8?video=<source>) is only as
 // alive as the SOURCE link inside it. Trusting it blindly served an expired
@@ -2615,7 +2649,7 @@ function checkCachedLinkStatus($url, $verify = false, $allowOctetStream = false)
                 return checkVideoProxyUpstreamAlive($hlsSource);
             }
             if (preg_match('#^https?://#i', $hlsSource)) {
-                return checkVideoProxyUpstreamAlive(wrapWithVideoProxy($hlsSource));
+                return aioCachedSourceStillAlive($hlsSource);
             }
         }
         return true;

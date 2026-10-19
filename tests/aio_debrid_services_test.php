@@ -37,7 +37,7 @@ function grabFunction($src, $name) {
 foreach ([
     'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
-    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
+    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
 ] as $fn) {
     eval(grabFunction($src, $fn));
 }
@@ -252,11 +252,15 @@ check('fallback: an url that is already video_proxy / one of our own endpoints i
     plainVideoFallbackUrl('http://127.0.0.1:18441/video_proxy.php?url=x') === 'http://127.0.0.1:18441/video_proxy.php?url=x'
     && plainVideoFallbackUrl('http://127.0.0.1:18441/hls_proxy.php?x=1') === 'http://127.0.0.1:18441/hls_proxy.php?x=1');
 
-$aliveHls = 'subtitle_track_playlist.m3u8?video=' . urlencode('https://aiostreams.elfhosted.com/playback/live/Movie.mkv') . '&imdb=tt1&lang=en';
-$deadHls = 'subtitle_track_playlist.m3u8?video=' . urlencode('https://aiostreams.elfhosted.com/playback/dead/Movie.mkv') . '&imdb=tt1&lang=en';
-check('cache: a cached HLS entry whose source is alive is served', checkCachedLinkStatus($aliveHls) === true);
-check('cache: a cached HLS entry whose source is DEAD is a miss (re-resolved), not served', checkCachedLinkStatus($deadHls) === false);
-check('FRESH result: an HLS url is accepted by checkLinkStatusCode even if a HEAD on its source would fail (a verified stream is never thrown away)', checkLinkStatusCode($deadHls) === true);
+$hlsFor = fn($src) => 'subtitle_track_playlist.m3u8?video=' . urlencode($src) . '&imdb=tt1&lang=en';
+check('cache: a cached HLS entry whose source answers is served', checkCachedLinkStatus($hlsFor($u('/fast'))) === true);
+check('cache: ...whose source now redirects to an ElfHosted slate is a miss (re-resolved)', checkCachedLinkStatus($hlsFor($u('/slate'))) === false);
+check('cache: ...whose source is 404 is a miss', checkCachedLinkStatus($hlsFor($u('/e404'))) === false);
+$t = microtime(true);
+check('cache: ...whose source merely times out is NOT condemned (a cold Real-Debrid link answers late)', checkCachedLinkStatus($hlsFor($u('/hang'))) === true);
+check(sprintf('cache: ...and the check is bounded (%.1fs)', microtime(true) - $t), microtime(true) - $t < 10);
+$deadHls = $hlsFor($u('/slate'));
+check('FRESH result: an HLS url is accepted by checkLinkStatusCode even if its source would fail a check (a verified stream is never thrown away)', checkLinkStatusCode($deadHls) === true);
 check('cache: an HLS entry with no video param is still trusted', checkCachedLinkStatus('subtitle_track_playlist.m3u8?imdb=tt1') === true);
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";

@@ -1017,6 +1017,63 @@ function adultFetchPage($url) {
     return false;
 }
 
+// The catalog's source url for a film can be stale (measured: 5 of 30 random films, all
+// "...-2-watch-xxx-porn-online-free" or "ggg-..." slugs, answer 404 while the page exists
+// under its normal slug). The site's own search finds it: pick the result whose slug
+// title matches the film name STRICTLY (same word-overlap rule the addon lookup uses:
+// all wanted words, every number, few extra words), so "Invitation to Anal" never lands
+// on "Invitation to Anal 5".
+function adultPickSearchResult($name, $html, $host) {
+    if (!preg_match_all('#https?://' . preg_quote($host, '#') . '/([a-z0-9\-]+)-watch-xxx-porn-online-free#i', $html, $m, PREG_SET_ORDER)) {
+        return null;
+    }
+    $best = null;
+    $bestScore = 0.0;
+    $seen = [];
+    foreach ($m as $hit) {
+        if (isset($seen[$hit[0]])) {
+            continue;
+        }
+        $seen[$hit[0]] = true;
+        $score = adultAddonTitleScore($name, str_replace('-', ' ', $hit[1]));
+        if ($score > $bestScore) {
+            $bestScore = $score;
+            $best = $hit[0];
+        }
+    }
+    return $bestScore >= 0.8 ? $best : null;
+}
+
+// Corrected source url for a stale one, or null. Remembered in a temp file (7 days when
+// found, 1 hour when not, so a film with no page does not cost a search on every play).
+function adultSourceFixFor($sourceUrl, $name) {
+    if (trim($name) === '') {
+        return null;
+    }
+    $file = sys_get_temp_dir() . '/adult_srcfix_' . md5($sourceUrl) . '.txt';
+    if (is_file($file)) {
+        $age = time() - (int) @filemtime($file);
+        $saved = trim((string) @file_get_contents($file));
+        if ($saved !== '' && $age < 7 * 86400) {
+            return $saved;
+        }
+        if ($saved === '' && $age < 3600) {
+            return null;
+        }
+    }
+    $host = (string) parse_url($sourceUrl, PHP_URL_HOST);
+    $found = null;
+    if ($host !== '') {
+        $html = adultFetchPage('https://' . $host . '/?s=' . urlencode($name));
+        $found = $html ? adultPickSearchResult($name, $html, $host) : null;
+    }
+    @file_put_contents($file, (string) $found);
+    if (!empty($GLOBALS['DEBUG'])) {
+        echo 'Adult source page is gone - search ' . ($found !== null ? 'found ' . htmlspecialchars($found) : 'found nothing') . '</br></br>';
+    }
+    return $found;
+}
+
 // Remembered hoster links per source page (temp file, 7 days). Written every time a
 // page was read, read only when the page cannot be fetched.
 function adultEmbedCachePath($sourceUrl) {
@@ -1069,6 +1126,18 @@ function adultResolveFromSources(array $details) {
             return false;
         }
         $html = adultFetchPage($source);
+        if (!$html && empty(adultEmbedCacheRead($source))) {
+            // Stale catalog url (the page is gone) and no remembered links: look the film up
+            // on the site itself.
+            $fixed = adultSourceFixFor($source, (string) ($details['name'] ?? ''));
+            if ($fixed !== null) {
+                $retry = adultFetchPage($fixed);
+                if ($retry) {
+                    $html = $retry;
+                    $source = $fixed;
+                }
+            }
+        }
         $embedUrls = [];
         $fromEmbedCache = false;
         if (!$html) {
@@ -10717,7 +10786,8 @@ function FindVideoExtractor($urlToCheck, $tSite, $referer, $identifier = null, $
 		'do0od.com' => 'DoodExtract',
 		'd0000d.com' => 'DoodExtract',
 		'd000d.com' => 'DoodExtract',
-		'uqload' => 'UqloadExtract', 
+		'playmogo.com' => 'DoodExtract', // DoodStream mirror used by the adult catalog source (labelled "DoodStream")
+		'uqload' => 'UqloadExtract',
 		'brucevotewithin' => 'VoeExtract',   	
 		'rabbitstream' => 'UpCloudExtract',
 		'vidcloud' => 'UpCloudExtract',

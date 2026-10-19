@@ -37,7 +37,7 @@ function grabFunction($src, $name) {
 foreach ([
     'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
-    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'aioBlockedReleaseWords', 'aioBlockedReleaseMatch', 'adultPageAttemptUrls', 'adultFetchPage', 'adultEmbedCachePath', 'adultEmbedCacheWrite', 'adultEmbedCacheRead', 'aioNoteLimitSlates', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
+    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'aioBlockedReleaseWords', 'aioBlockedReleaseMatch', 'adultPageAttemptUrls', 'adultFetchPage', 'adultPickSearchResult', 'adultEmbedCachePath', 'adultEmbedCacheWrite', 'adultEmbedCacheRead', 'aioNoteLimitSlates', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
 ] as $fn) {
     eval(grabFunction($src, $fn));
 }
@@ -50,6 +50,7 @@ function debridCleanupMaybeTrigger($service, $text, $where = '') { global $trigg
 foreach (['hlsVideoRefPath', 'hlsVideoRef', 'hlsExpandVideoParam'] as $fn) {
     eval(grabFunction($hlsSrc, $fn));
 }
+require_once __DIR__ . '/../adult_addon.php'; // adultAddonTitleScore() for the search fix
 $DEBUG = false;
 define('AIO_LIST_CACHE_TTL', 600);
 $aioTestCacheDir = sys_get_temp_dir() . '/aio_test_cache_' . getmypid();
@@ -362,6 +363,16 @@ check(sprintf('catalog down: the 2-hour-old copy is used instead of failing (%.1
 touch($cacheFile, time() - 7 * 3600);
 check('catalog down: a copy older than 6 hours is NOT used', fetchAioStreamsList($deadUrl) === false);
 @unlink($cacheFile);
+
+
+// ---------------------------------------------------------------- adult: stale catalog url -> search result
+$sr = '<a href="https://watchpornx.com/invitation-to-anal-5-watch-xxx-porn-online-free">x</a><a href="https://watchpornx.com/invitation-to-anal-watch-xxx-porn-online-free">y</a>'
+    . '<a href="https://watchpornx.com/invitation-to-anal-3-watch-xxx-porn-online-free">z</a><a href="https://watchpornx.com/anal-invitation-watch-xxx-porn-online-free">w</a>';
+check('search fix: the exact title wins over the numbered sequels', adultPickSearchResult('Invitation to Anal', $sr, 'watchpornx.com') === 'https://watchpornx.com/invitation-to-anal-watch-xxx-porn-online-free');
+check('search fix: a numbered title picks its own number', adultPickSearchResult('Invitation to Anal 3', $sr, 'watchpornx.com') === 'https://watchpornx.com/invitation-to-anal-3-watch-xxx-porn-online-free');
+check('search fix: no close match -> null (never a wrong film)', adultPickSearchResult('She Likes It Rough 2', $sr, 'watchpornx.com') === null);
+check('search fix: only links of the same host count', adultPickSearchResult('Invitation to Anal', $sr, 'other.example') === null);
+check('search fix: a page without results -> null', adultPickSearchResult('Anything', '<html>nothing</html>', 'watchpornx.com') === null);
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

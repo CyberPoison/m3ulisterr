@@ -1543,6 +1543,22 @@ function getKeyframeTimestamps($videoUrl, $ffprobePath) {
     return [];
 }
 
+// Where to send a client when HLS cannot be built for a source (no ffmpeg,
+// unreadable source, unreliable seek index). NEVER the raw source URL: an
+// AIOStreams /playback/ link is locked to the IP that first requested it (this
+// server), so handing it to a player shows ElfHosted's "Wrong IP" slate. The
+// server's own byte proxy streams it for any client IP instead.
+function plainVideoFallbackUrl($videoUrl) {
+    if (strpos($videoUrl, 'video_proxy.php') !== false) {
+        return $videoUrl;
+    }
+    $base = rtrim(locateBaseURL(), '/');
+    if (stripos($videoUrl, $base . '/') === 0) {
+        return $videoUrl; // already one of our own endpoints
+    }
+    return $base . '/video_proxy.php?url=' . urlencode($videoUrl) . '&auto=1&data=' . base64_encode('|');
+}
+
 // Lets the client finish while the script keeps working (background probes,
 // cache writes). Under PHP-FPM that is fastcgi_finish_request(). The production
 // image is php:8.2-apache (mod_php), which has no such function: the old

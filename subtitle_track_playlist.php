@@ -48,7 +48,7 @@ if (!preg_match('#^https?://#i', $videoUrl)) {
 
 function fallbackToPlainVideoRedirectTP($videoUrl) {
     header('HTTP/1.1 302 Found');
-    header('Location: ' . $videoUrl);
+    header('Location: ' . plainVideoFallbackUrl($videoUrl));
     exit;
 }
 

@@ -51,6 +51,17 @@ if ($path === '/catalog') {
     exit;
 }
 
+// The server's own byte proxy, as far as the cache-liveness check cares: HEAD -> 200 for a live source,
+// 502 ("upstream could not be streamed") when the wrapped url contains "dead".
+if ($path === '/video_proxy.php') {
+    if (strpos($_GET['url'] ?? '', 'dead') !== false) {
+        http_response_code(502);
+    } else {
+        header('Content-Type: video/mp4');
+    }
+    exit;
+}
+
 switch ($path) {
     case '/fast':
         header('Location: ' . $base . '/cdn/video.mp4', true, 307);

@@ -37,10 +37,12 @@ function grabFunction($src, $name) {
 foreach ([
     'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
-    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList',
+    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'checkLinkStatusCode', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
 ] as $fn) {
     eval(grabFunction($src, $fn));
 }
+$hlsSrc = file_get_contents(__DIR__ . '/../hls_shared.php');
+eval(grabFunction($hlsSrc, 'plainVideoFallbackUrl'));
 $DEBUG = false;
 define('AIO_LIST_CACHE_TTL', 600);
 function aioListCacheDir() { return false; } // no cache: every call really fetches
@@ -238,6 +240,23 @@ $el = microtime(true) - $t;
 check(sprintf('catalog: a failed first request is replaced immediately, not after a wait (%.1fs)', $el), is_string($body) && strpos($body, '"ok"') !== false && $el < 2);
 @unlink(sys_get_temp_dir() . '/mock_catalog_slow' . getmypid());
 @unlink(sys_get_temp_dir() . '/mock_catalog_fail' . getmypid());
+
+
+// ---------------------------------------------------------------- never hand a player a raw IP-locked url
+function locateBaseURL() { return 'http://127.0.0.1:18441/'; }
+$rawElf = 'https://aiostreams.elfhosted.com/playback/abc/def/Movie%20x264.mkv';
+$fb = plainVideoFallbackUrl($rawElf);
+check('fallback: a raw AIOStreams url is wrapped in the server byte proxy, not given to the player',
+    strpos($fb, 'http://127.0.0.1:18441/video_proxy.php?url=' . urlencode($rawElf)) === 0 && strpos($fb, 'auto=1') !== false);
+check('fallback: an url that is already video_proxy / one of our own endpoints is left alone',
+    plainVideoFallbackUrl('http://127.0.0.1:18441/video_proxy.php?url=x') === 'http://127.0.0.1:18441/video_proxy.php?url=x'
+    && plainVideoFallbackUrl('http://127.0.0.1:18441/hls_proxy.php?x=1') === 'http://127.0.0.1:18441/hls_proxy.php?x=1');
+
+$aliveHls = 'subtitle_track_playlist.m3u8?video=' . urlencode('https://aiostreams.elfhosted.com/playback/live/Movie.mkv') . '&imdb=tt1&lang=en';
+$deadHls = 'subtitle_track_playlist.m3u8?video=' . urlencode('https://aiostreams.elfhosted.com/playback/dead/Movie.mkv') . '&imdb=tt1&lang=en';
+check('cache: a cached HLS entry whose source is alive is served', checkLinkStatusCode($aliveHls) === true);
+check('cache: a cached HLS entry whose source is DEAD is a miss (re-resolved), not served', checkLinkStatusCode($deadHls) === false);
+check('cache: an HLS entry with no video param is still trusted', checkLinkStatusCode('subtitle_track_playlist.m3u8?imdb=tt1') === true);
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

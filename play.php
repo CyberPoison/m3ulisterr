@@ -2604,9 +2604,31 @@ function checkLinkStatusCode($url, $verify = false, $allowOctetStream = false)
         return checkVideoProxyUpstreamAlive($url);
     }
 
-    // hls_proxy.php and the subtitle playlist endpoint aren't covered by this
-    // fix - still trusted as before.
-    if (strpos($url, 'hls_proxy.php') !== false || strpos($url, 'subtitle_track_playlist.m3u8') !== false) {
+    // A cached HLS entry (subtitle_track_playlist.m3u8?video=<source>) is only as
+    // alive as the SOURCE link inside it. Trusting it blindly served an expired
+    // ElfHosted link for hours (a pre-warmed entry): the playlist script could not
+    // probe the source, fell back to redirecting the player straight to the raw
+    // IP-locked link and the TV showed ElfHosted's "Wrong IP" slate (Godzilla x Kong).
+    // Checked through the server's own byte proxy, i.e. from the IP the link is
+    // locked to; a dead one counts as a cache miss and is re-resolved.
+    if (strpos($url, 'subtitle_track_playlist.m3u8') !== false) {
+        $query = parse_url($url, PHP_URL_QUERY);
+        parse_str((string) $query, $hlsParams);
+        $hlsSource = $hlsParams['video'] ?? '';
+        if ($hlsSource === '') {
+            return true;
+        }
+        if (strpos($hlsSource, 'video_proxy.php') !== false) {
+            return checkVideoProxyUpstreamAlive($hlsSource);
+        }
+        if (preg_match('#^https?://#i', $hlsSource)) {
+            return checkVideoProxyUpstreamAlive(wrapWithVideoProxy($hlsSource));
+        }
+        return true;
+    }
+
+    // hls_proxy.php isn't covered by this fix - still trusted as before.
+    if (strpos($url, 'hls_proxy.php') !== false) {
         return true;
     }
 	

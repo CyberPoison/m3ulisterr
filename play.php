@@ -283,7 +283,7 @@ function movieDetails_TMDB($movieId, $apiKey, $useRealDebrid)
 	}
 
 	// If the URL is found in cache and hasn't expired, perform a 301 redirect
-	if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkLinkStatusCode($cachedUrl)) {
+	if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkCachedLinkStatus($cachedUrl)) {
 		if ($GLOBALS['DEBUG']) {
 			echo "Service: Pulled from the cache - Url: " . $cachedUrl . "</br></br>";
 			echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
@@ -635,7 +635,7 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
 	}
 
     // If the URL is found in cache and hasn't expired, perform a 301 redirect
-	if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkLinkStatusCode($cachedUrl)) {
+	if ($cachedUrl !== null && $cachedUrl !== '_running_' && checkCachedLinkStatus($cachedUrl)) {
 		if ($GLOBALS['DEBUG']) {
 			echo "Service: Pulled from the cache - Url: " . $cachedUrl . "</br></br>";
 			echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
@@ -2594,6 +2594,35 @@ function checkVideoProxyUpstreamAlive($proxyUrl) {
     return true;
 }
 
+// Liveness check for a link read back from the CACHE (not for a fresh result).
+// A cached HLS entry (subtitle_track_playlist.m3u8?video=<source>) is only as
+// alive as the SOURCE link inside it. Trusting it blindly served an expired
+// ElfHosted link for hours (a pre-warmed entry): the playlist script could not
+// probe the source, fell back to redirecting the player straight to the raw
+// IP-locked link and the TV showed ElfHosted's "Wrong IP" slate (Godzilla x Kong).
+// Checked through the server's own byte proxy, i.e. from the IP the link is
+// locked to; a dead one counts as a cache miss and is re-resolved.
+// Deliberately NOT part of checkLinkStatusCode(): that one is also run on a
+// just-resolved result, where a transient HEAD error on a brand-new link must
+// never throw away a verified stream (it did, for one release: every fresh
+// English resolve fell through to the torrent scrapers).
+function checkCachedLinkStatus($url, $verify = false, $allowOctetStream = false) {
+    if (strpos($url, 'subtitle_track_playlist.m3u8') !== false) {
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $hlsParams);
+        $hlsSource = $hlsParams['video'] ?? '';
+        if ($hlsSource !== '') {
+            if (strpos($hlsSource, 'video_proxy.php') !== false) {
+                return checkVideoProxyUpstreamAlive($hlsSource);
+            }
+            if (preg_match('#^https?://#i', $hlsSource)) {
+                return checkVideoProxyUpstreamAlive(wrapWithVideoProxy($hlsSource));
+            }
+        }
+        return true;
+    }
+    return checkLinkStatusCode($url, $verify, $allowOctetStream);
+}
+
 // $allowOctetStream: also accept a 2xx application/octet-stream answer for a URL
 // that names a video file (debrid CDNs serve direct files that way).
 function checkLinkStatusCode($url, $verify = false, $allowOctetStream = false)
@@ -2604,26 +2633,10 @@ function checkLinkStatusCode($url, $verify = false, $allowOctetStream = false)
         return checkVideoProxyUpstreamAlive($url);
     }
 
-    // A cached HLS entry (subtitle_track_playlist.m3u8?video=<source>) is only as
-    // alive as the SOURCE link inside it. Trusting it blindly served an expired
-    // ElfHosted link for hours (a pre-warmed entry): the playlist script could not
-    // probe the source, fell back to redirecting the player straight to the raw
-    // IP-locked link and the TV showed ElfHosted's "Wrong IP" slate (Godzilla x Kong).
-    // Checked through the server's own byte proxy, i.e. from the IP the link is
-    // locked to; a dead one counts as a cache miss and is re-resolved.
+    // The subtitle playlist endpoint is trusted here (a FRESH result was just
+    // verified by the resolver). A CACHED one is checked separately, see
+    // checkCachedLinkStatus().
     if (strpos($url, 'subtitle_track_playlist.m3u8') !== false) {
-        $query = parse_url($url, PHP_URL_QUERY);
-        parse_str((string) $query, $hlsParams);
-        $hlsSource = $hlsParams['video'] ?? '';
-        if ($hlsSource === '') {
-            return true;
-        }
-        if (strpos($hlsSource, 'video_proxy.php') !== false) {
-            return checkVideoProxyUpstreamAlive($hlsSource);
-        }
-        if (preg_match('#^https?://#i', $hlsSource)) {
-            return checkVideoProxyUpstreamAlive(wrapWithVideoProxy($hlsSource));
-        }
         return true;
     }
 

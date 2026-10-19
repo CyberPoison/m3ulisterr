@@ -37,7 +37,7 @@ function grabFunction($src, $name) {
 foreach ([
     'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
-    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'checkLinkStatusCode', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
+    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
 ] as $fn) {
     eval(grabFunction($src, $fn));
 }
@@ -254,9 +254,10 @@ check('fallback: an url that is already video_proxy / one of our own endpoints i
 
 $aliveHls = 'subtitle_track_playlist.m3u8?video=' . urlencode('https://aiostreams.elfhosted.com/playback/live/Movie.mkv') . '&imdb=tt1&lang=en';
 $deadHls = 'subtitle_track_playlist.m3u8?video=' . urlencode('https://aiostreams.elfhosted.com/playback/dead/Movie.mkv') . '&imdb=tt1&lang=en';
-check('cache: a cached HLS entry whose source is alive is served', checkLinkStatusCode($aliveHls) === true);
-check('cache: a cached HLS entry whose source is DEAD is a miss (re-resolved), not served', checkLinkStatusCode($deadHls) === false);
-check('cache: an HLS entry with no video param is still trusted', checkLinkStatusCode('subtitle_track_playlist.m3u8?imdb=tt1') === true);
+check('cache: a cached HLS entry whose source is alive is served', checkCachedLinkStatus($aliveHls) === true);
+check('cache: a cached HLS entry whose source is DEAD is a miss (re-resolved), not served', checkCachedLinkStatus($deadHls) === false);
+check('FRESH result: an HLS url is accepted by checkLinkStatusCode even if a HEAD on its source would fail (a verified stream is never thrown away)', checkLinkStatusCode($deadHls) === true);
+check('cache: an HLS entry with no video param is still trusted', checkCachedLinkStatus('subtitle_track_playlist.m3u8?imdb=tt1') === true);
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

@@ -6,6 +6,10 @@
 
 ### 📅 Update 10/19/2026
 
+**Hotfix: the HLS cache liveness check no longer applies to freshly resolved results (it made every fresh English resolve fall through to the torrent scrapers for one release):**
+- The previous fix put the source-liveness check inside `checkLinkStatusCode()`, which the provider loop also runs on a just-resolved result. A transient HEAD 404 through `video_proxy.php` on a brand-new link (seen on production with Godzilla x Kong right after the resolver had verified it) rejected a good stream, the resolve then ran every torrent scraper (60s, empty HTTP 200) and the TV just kept loading. Found by watching the SHIELD with adb after the deploy.
+- The check now lives in `checkCachedLinkStatus()` and is called only where a link is READ BACK from the cache (movies and series); `checkLinkStatusCode()` trusts the playlist endpoint again. New unit check: a fresh HLS result is accepted even if a HEAD on its source would fail.
+
 **Fix: ElfHosted "Wrong IP" slate on the TV (MyTVOnline3, Godzilla x Kong) - a dead cached HLS source is no longer served, and the HLS fallback never exposes the raw IP-locked link:**
 - **What happened (reproduced with adb on the SHIELD + production):** the cached entry for the film was an HLS playlist whose SOURCE link had expired (the server's own byte proxy answered 502 for it). `checkLinkStatusCode()` trusted every `subtitle_track_playlist.m3u8` cache entry without looking at the source, so it was served; the master playlist then could not probe the source and its fallback answered `302 Location: <raw aiostreams.elfhosted.com/playback/...>`. An AIOStreams `/playback/` link is locked to the IP that first requested it (the server), so the player calling it directly got the slate "Wrong IP - Expected IP 37.59.104.1 / Current IP <device>".
 - **Fix 1:** a cached HLS entry is now liveness-checked through the server's own byte proxy (same IP as the lock); a dead source is a cache miss and the title is re-resolved on the spot instead of staying broken until the cache entry expires (up to 10h, pre-warmed entries included).

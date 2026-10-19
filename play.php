@@ -4119,57 +4119,43 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     // tier/resolution priority order as before.
     $label = $languageName;
 
-    $slowResolveUrls = [];
-    foreach ($candidates as $c) {
-        if (aioServiceResolvesSlowly($c['debrid'])) {
-            $slowResolveUrls[] = $c['url'];
-        }
-    }
-    $aioTick('verifying ' . count($candidates) . ' candidate links (' . count($slowResolveUrls) . ' slow-resolve)');
-    $batchResults = checkAioStreamsLinksPlayableBatch(array_column($candidates, 'url'), $slowResolveUrls);
-    $aioTick('link verification done: ' . count(array_filter($batchResults, function ($r) { return $r['ok']; })) . ' ok, ' . count(array_filter($batchResults, function ($r) { return !$r['ok']; })) . ' rejected');
-
-    // Parallel duration probes for every playable candidate up front, so the
-    // per-candidate ffprobe wait no longer serializes (the main cause of slow
-    // cold resolves). Non-proxy only - proxy mode uses the free size check from
-    // the batch result instead. See batchAioStreamsDurationOk().
-    $durationOk = [];
-    if (!$proxyMode) {
-        $okFinals = [];
-        foreach ($candidates as $c) {
-            $chk = $batchResults[$c['url']] ?? null;
-            if ($chk && $chk['ok'] && !empty($chk['finalUrl'])) {
-                $okFinals[] = $chk['finalUrl'];
+    // FAST START (explicit request: open as fast as possible). Candidates are
+    // verified in two passes instead of one all-at-once rush:
+    //  1. a first wave of the 8 best-ranked links (>=3 per service), checked
+    //     concurrently but in priority order, stopping the moment the best
+    //     playable one is known (see checkAioStreamsLinksPlayableBatchOnce()
+    //     $earlyExit) - no more waiting ~30s for a dead/cold Real-Debrid link
+    //     ranked behind the one that already answered;
+    //  2. only if nothing from wave 1 works out, EVERYTHING not conclusively
+    //     rejected yet (rest of the window + skipped + transient failures) in a
+    //     complete pass with the long Real-Debrid retry window, as before.
+    // Wave 1 being small also stops the 15-requests-at-once burst that tripped
+    // ElfHosted's per-IP "Too many requests" slate.
+    $firstWave = aioPickVerificationWindow($candidates, 8, 3);
+    $slowOf = function (array $list) {
+        $slow = [];
+        foreach ($list as $c) {
+            if (aioServiceResolvesSlowly($c['debrid'])) {
+                $slow[] = $c['url'];
             }
         }
-        if (!empty($okFinals)) {
-            $durationOk = batchAioStreamsDurationOk($okFinals);
-        }
-    }
+        return $slow;
+    };
 
-    foreach ($candidates as $candidate) {
+    // Everything that happens to ONE candidate whose link already passed the
+    // cheap check. Returns the selected url, or false (this candidate is out).
+    $tryCandidate = function (array $candidate, array $check) use ($DEBUG, $label, $tSite, $proxyMode, $languageName, $logTitle, $streamUrl, $type, $movieId, $aioTick) {
         $url = $candidate['url'];
-        $check = $batchResults[$url] ?? ['ok' => false, 'finalUrl' => $url, 'reason' => 'not checked'];
-
-        if (!$check['ok']) {
-            if ($DEBUG) {
-                echo "Rejected (unplayable) $label candidate via $tSite: $url - " . htmlspecialchars($check['reason']) . "</br></br>";
-            }
-            continue;
-        }
 
         // Proxy mode never runs ffmpeg/ffprobe. The elfhosted placeholder clips
         // the duration probe exists to catch are ~3 MB, and no real movie or
         // episode is under 20 MB, so the Content-Range size is enough. An
         // unknown size (0) is let through rather than guessed at.
-        $placeholderSuspected = $proxyMode
-            ? ($check['totalBytes'] > 0 && $check['totalBytes'] < 20 * 1000 * 1000)
-            : !($durationOk[$check['finalUrl']] ?? true);
-        if ($placeholderSuspected) {
+        if ($proxyMode && $check['totalBytes'] > 0 && $check['totalBytes'] < 20 * 1000 * 1000) {
             if ($DEBUG) {
                 echo "Rejected (unplayable, implausibly short or small) $label candidate via $tSite: $url</br></br>";
             }
-            continue;
+            return false;
         }
 
         // Before the 10 MB throughput test, so a wrong-language file is
@@ -4181,17 +4167,31 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
                 echo ($languageOk ? 'Audio check passed' : 'Rejected (wrong default audio language)') . " for $label candidate via $tSite: $languageReason - $url</br></br>";
             }
             if (!$languageOk) {
-                continue;
+                return false;
             }
+            $aioTick('throughput probe starting for ' . $candidate['debrid'] . ' candidate');
+            $throughputMbps = measureAioStreamsThroughputMbps($check['finalUrl']);
+            $durationOk = true;
+        } else {
+            // The duration probe (ffprobe, rejects the ~2 minute placeholder
+            // clip) and the throughput download run AT THE SAME TIME, and only
+            // for the candidate actually about to be selected - it used to be
+            // an ffprobe for every playable candidate up front, then the
+            // download, back to back.
+            $aioTick('duration + throughput probes starting for ' . $candidate['debrid'] . ' candidate');
+            list($durationOk, $throughputMbps) = aioProbeDurationAndThroughput($check['finalUrl']);
         }
-
-        $aioTick('throughput probe starting for ' . $candidate['debrid'] . ' candidate');
-        $throughputMbps = measureAioStreamsThroughputMbps($check['finalUrl']);
+        if (!$durationOk) {
+            if ($DEBUG) {
+                echo "Rejected (unplayable, implausibly short or small) $label candidate via $tSite: $url</br></br>";
+            }
+            return false;
+        }
         if (!isAioStreamsThroughputOk($throughputMbps, $candidate['bitrateMbps'])) {
             if ($DEBUG) {
                 echo "Rejected (unplayable, too slow to sustain its own bitrate) $label candidate via $tSite: $url - measured " . round($throughputMbps, 2) . " Mbps vs declared {$candidate['bitrateMbps']} Mbps</br></br>";
             }
-            continue;
+            return false;
         }
 
         if ($DEBUG) {
@@ -4203,6 +4203,63 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         $GLOBALS['m3u_selection'] = ['provider' => $tSite, 'debrid' => $candidate['debrid'], 'filename' => $candidate['filename'], 'audioLangs' => $candidate['audioLangs'], 'resolution' => $candidate['resolution'], 'codec' => $candidate['codec'], 'cached' => $candidate['cached'], 'sourceUrl' => $url, 'throughputMbps' => round($throughputMbps, 2)];
 
         return $url;
+    };
+
+    // ---- pass 1: first wave, progressive -----------------------------------
+    $aioTick('verifying first wave: ' . count($firstWave) . ' of ' . count($candidates) . ' candidate links (progressive)');
+    $waveResults = checkAioStreamsLinksPlayableBatch(array_column($firstWave, 'url'), $slowOf($firstWave), 12, 25, true, $proxyMode ? 2 : 1);
+    $aioTick('first wave: ' . count(array_filter($waveResults, function ($r) { return $r['ok']; })) . ' ok, ' . count(array_filter($waveResults, function ($r) { return !$r['ok'] && empty($r['skipped']); })) . ' rejected, ' . count(array_filter($waveResults, function ($r) { return !empty($r['skipped']); })) . ' not waited for');
+
+    $needsFullCheck = [];
+    foreach ($candidates as $candidate) {
+        $url = $candidate['url'];
+        $check = $waveResults[$url] ?? null;
+        if ($check === null || !empty($check['skipped']) || (!$check['ok'] && !empty($check['transient']))) {
+            $needsFullCheck[] = $candidate; // not conclusively judged yet
+            continue;
+        }
+        if (!$check['ok']) {
+            if ($DEBUG) {
+                echo "Rejected (unplayable) $label candidate via $tSite: $url - " . htmlspecialchars($check['reason']) . "</br></br>";
+            }
+            continue;
+        }
+        $selected = $tryCandidate($candidate, $check);
+        if ($selected !== false) {
+            return $selected;
+        }
+    }
+
+    // ---- pass 2: everything not judged yet, ALSO progressive ------------------
+    // Wave 1 already started the (slow) Real-Debrid resolves of whatever it did
+    // not wait for - they keep running on AIOStreams' side - so re-checking
+    // them now answers in about a second and the long 25s retry window is not
+    // needed. Repeats (max 3 rounds) while there are candidates a round
+    // skipped; a round that selects nothing ends with everything judged.
+    for ($round = 1; $round <= 3 && !empty($needsFullCheck); $round++) {
+        $aioTick("round $round: checking " . count($needsFullCheck) . ' more candidate links (progressive)');
+        $fullResults = checkAioStreamsLinksPlayableBatch(array_column($needsFullCheck, 'url'), $slowOf($needsFullCheck), 12, 25, true, 3);
+        $aioTick("round $round: " . count(array_filter($fullResults, function ($r) { return $r['ok']; })) . ' ok, ' . count(array_filter($fullResults, function ($r) { return !$r['ok'] && empty($r['skipped']); })) . ' rejected, ' . count(array_filter($fullResults, function ($r) { return !empty($r['skipped']); })) . ' not waited for');
+        $nextRound = [];
+        foreach ($needsFullCheck as $candidate) {
+            $url = $candidate['url'];
+            $check = $fullResults[$url] ?? ['ok' => false, 'finalUrl' => $url, 'reason' => 'not checked'];
+            if (!empty($check['skipped'])) {
+                $nextRound[] = $candidate;
+                continue;
+            }
+            if (!$check['ok']) {
+                if ($DEBUG) {
+                    echo "Rejected (unplayable) $label candidate via $tSite: $url - " . htmlspecialchars($check['reason']) . "</br></br>";
+                }
+                continue;
+            }
+            $selected = $tryCandidate($candidate, $check);
+            if ($selected !== false) {
+                return $selected;
+            }
+        }
+        $needsFullCheck = $nextRound;
     }
 
     // Explicitly requested fallback: when nothing already cached turned out
@@ -4366,7 +4423,15 @@ function waitForAioStreamsCachingCompletion($url, $declaredBitrateMbps, $maxWait
 //
 // $timeouts maps url => seconds for the urls that need more than
 // $defaultTimeout (see aioServiceResolvesSlowly()).
-function checkAioStreamsLinksPlayableBatchOnce(array $urls, array $timeouts = [], $defaultTimeout = 12) {
+//
+// $earlyExit (fast start): $urls are in PRIORITY order. Instead of waiting for
+// every transfer, the loop stops as soon as the best-ranked playable link is
+// known: some url has answered OK AND every url ranked before it has either
+// answered (failed) or been pending longer than $graceSeconds (a cold
+// Real-Debrid link takes ~25s to resolve; waiting for it would cost far more
+// than taking the next good link). Urls it did not wait for come back with
+// 'skipped' => true (not a verdict - the caller can still check them later).
+function checkAioStreamsLinksPlayableBatchOnce(array $urls, array $timeouts = [], $defaultTimeout = 12, $earlyExit = false, $graceSeconds = 3.0, $wantOk = 1) {
     $mh = curl_multi_init();
     $handles = [];
     $totalSizes = [];
@@ -4395,16 +4460,8 @@ function checkAioStreamsLinksPlayableBatchOnce(array $urls, array $timeouts = []
         $handles[$url] = $ch;
     }
 
-    $running = null;
-    do {
-        $status = curl_multi_exec($mh, $running);
-        if ($running > 0) {
-            curl_multi_select($mh, 1);
-        }
-    } while ($running > 0 && $status === CURLM_OK);
-
-    $results = [];
-    foreach ($handles as $url => $ch) {
+    // Turns one FINISHED transfer into its verdict.
+    $evaluate = function ($url, $ch) use (&$totalSizes) {
         $body = curl_multi_getcontent($ch);
         $curlError = curl_error($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -4436,50 +4493,111 @@ function checkAioStreamsLinksPlayableBatchOnce(array $urls, array $timeouts = []
             $transient = ($httpCode === 0 || $httpCode >= 500);
             $reason = "request failed - httpCode=$httpCode, curlError=$curlError";
         } elseif (stripos((string) $finalUrl, 'slate.elfhosted.com') !== false) {
-            // Surfaces which specific slate variant (wrong IP, expired, not
-            // cached, etc.) production itself actually hit, and what IP
-            // production's own outbound request appeared as to elfhosted -
-            // both otherwise invisible from outside production. This is a
-            // genuine "not ready" signal, not a hiccup - retrying instantly
-            // won't change it, so not marked transient.
+            // A genuine "not ready" signal (wrong IP, expired, not cached,
+            // too many requests...), not a hiccup - retrying instantly won't
+            // change it, so not marked transient.
             $ok = false;
             $reason = "slate.elfhosted.com redirect - finalUrl=$finalUrl";
         } elseif (!empty($contentType) && stripos($contentType, 'video/') === false && stripos($contentType, 'application/octet-stream') === false && stripos($contentType, 'application/force-download') === false) {
             // A real video response is either a real video/* content-type,
-            // or (for a range request against a server that doesn't echo one
-            // back) at least a binary-looking payload - the slate error
+            // or at least a binary-looking payload - the slate error
             // response is HTML/JSON regardless of what content-type it
-            // claims, so this catches variants of the same failure that
-            // don't happen to redirect through that exact host.
-            // application/force-download is what Real-Debrid's CDN labels
-            // every file it serves (confirmed on real *.download.real-
-            // debrid.com responses) - a generic binary type like
-            // octet-stream, never used for an error body.
+            // claims. application/force-download is what Real-Debrid's CDN
+            // labels every file it serves (confirmed on real *.download.real-
+            // debrid.com responses).
             $ok = false;
             $reason = "content-type - httpCode=$httpCode, contentType=$contentType, finalUrl=$finalUrl";
         } elseif (empty($contentType) && $httpCode >= 300 && $httpCode < 400) {
-            // Confirmed directly: a multi-hop redirect chain (aiostreams ->
-            // mediafusion/comet -> debrid host) that gets cut short mid-chain
-            // (elfhosted-side latency during the exact window above) leaves
-            // curl reporting the LAST redirect's own 3xx status with no
-            // content-type yet known - httpCode alone looks harmless (not an
-            // error), but $finalUrl here is still just another redirect hop,
-            // not the real playable resource, so accepting it would hand the
-            // caller a URL that only redirects again instead of streaming.
-            // Same retry treatment as a straight 5xx.
+            // Confirmed directly: a multi-hop redirect chain that gets cut
+            // short mid-chain leaves curl reporting the LAST redirect's own
+            // 3xx status with no content-type - $finalUrl is then just
+            // another redirect hop, not the real playable resource. Same
+            // retry treatment as a straight 5xx.
             $ok = false;
             $transient = true;
             $reason = "stalled mid-redirect - httpCode=$httpCode, finalUrl=$finalUrl";
         }
 
-        $results[$url] = ['ok' => $ok, 'transient' => $transient, 'finalUrl' => (string) $finalUrl, 'reason' => $reason, 'totalBytes' => $totalSizes[$url] ?? 0];
+        return ['ok' => $ok, 'transient' => $transient, 'finalUrl' => (string) $finalUrl, 'reason' => $reason, 'totalBytes' => $totalSizes[$url] ?? 0];
+    };
 
+    $results = [];
+    $started = microtime(true);
+    $bestKnown = function () use (&$results, $urls, $started, $graceSeconds, $wantOk) {
+        $elapsed = microtime(true) - $started;
+        $prefixOk = false;
+        foreach ($urls as $u) {
+            if (isset($results[$u])) {
+                if ($results[$u]['ok']) {
+                    $prefixOk = true;
+                    break;
+                }
+                continue;
+            }
+            if ($elapsed < $graceSeconds) {
+                return false; // a better-ranked link is still inside its grace window
+            }
+        }
+        if (!$prefixOk) {
+            return false;
+        }
+        // $wantOk > 1: also keep collecting until that many playable links are
+        // known (spare candidates for when the best one fails the later
+        // language / duration / throughput checks) - but never longer than
+        // twice the grace window.
+        $okCount = 0;
+        foreach ($results as $r) {
+            if ($r['ok']) {
+                $okCount++;
+            }
+        }
+        return $okCount >= $wantOk || $elapsed >= $graceSeconds * 2;
+    };
+
+    $running = null;
+    $stoppedEarly = false;
+    do {
+        $status = curl_multi_exec($mh, $running);
+        if ($earlyExit) {
+            while (($info = curl_multi_info_read($mh)) !== false) {
+                if ($info['msg'] === CURLMSG_DONE) {
+                    $u = array_search($info['handle'], $handles, true);
+                    if ($u !== false && !isset($results[$u])) {
+                        $results[$u] = $evaluate($u, $info['handle']);
+                    }
+                }
+            }
+            if ($bestKnown()) {
+                $stoppedEarly = true;
+                break;
+            }
+        }
+        if ($running > 0) {
+            curl_multi_select($mh, $earlyExit ? 0.1 : 1);
+        }
+    } while ($running > 0 && $status === CURLM_OK);
+
+    foreach ($handles as $url => $ch) {
+        if (!isset($results[$url])) {
+            if ($stoppedEarly) {
+                // Not waited for: skipped, not rejected. The transfer is aborted
+                // below; a debrid link keeps resolving on AIOStreams' side.
+                $results[$url] = ['ok' => false, 'transient' => false, 'skipped' => true, 'finalUrl' => $url, 'reason' => 'not waited for (a better-ranked link was already playable)', 'totalBytes' => 0];
+            } else {
+                $results[$url] = $evaluate($url, $ch);
+            }
+        }
         curl_multi_remove_handle($mh, $ch);
         curl_close($ch);
     }
     curl_multi_close($mh);
 
-    return $results;
+    // Same order as $urls.
+    $ordered = [];
+    foreach ($urls as $u) {
+        $ordered[$u] = $results[$u];
+    }
+    return $ordered;
 }
 
 // Same checks as checkAioStreamsLinksPlayableBatchOnce(), but a failure
@@ -4497,7 +4615,13 @@ function checkAioStreamsLinksPlayableBatchOnce(array $urls, array $timeouts = []
 // on AIOStreams' side and it keeps running after we hang up, so the retry -
 // given the longer $slowRetryTimeout instead of $timeout - collects the
 // finished result (a repeat hit then answers in about a second).
-function checkAioStreamsLinksPlayableBatch(array $urls, array $slowResolveUrls = [], $timeout = 12, $slowRetryTimeout = 25) {
+function checkAioStreamsLinksPlayableBatch(array $urls, array $slowResolveUrls = [], $timeout = 12, $slowRetryTimeout = 25, $earlyExit = false, $wantOk = 1) {
+    if ($earlyExit) {
+        // Fast start: no retry round either - the caller re-checks what it
+        // skipped or what failed transiently in a second, complete pass only
+        // if the first-ranked playable link does not work out.
+        return checkAioStreamsLinksPlayableBatchOnce($urls, [], $timeout, true, 3.0, $wantOk);
+    }
     $results = checkAioStreamsLinksPlayableBatchOnce($urls, [], $timeout);
 
     $retryUrls = [];
@@ -4673,6 +4797,63 @@ function batchAioStreamsDurationOk(array $finalUrls) {
         $results[$u] = !($duration > 0 && $duration < 300);
     }
     return $results;
+}
+
+// Runs the movie-length check (ffprobe) and the throughput download
+// concurrently for ONE resolved url and returns [durationOk, throughputMbps].
+// ffprobe is started first (non-blocking), the throughput download runs while
+// it works, then its answer is collected. Same verdicts as
+// isAioStreamsLinkDurationOk() + measureAioStreamsThroughputMbps() one after
+// the other, minus the ffprobe wait. A probe that cannot run or answer never
+// rejects (unknown is let through, like before).
+function aioProbeDurationAndThroughput($finalUrl) {
+    static $ffprobePath = null;
+    if ($ffprobePath === null) {
+        $ffprobePath = trim((string) shell_exec('command -v ffprobe 2>/dev/null'));
+    }
+    $proc = null;
+    $pipes = [];
+    if (!empty($ffprobePath)) {
+        $proc = @proc_open([$ffprobePath, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', $finalUrl],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'a']], $pipes);
+        if (is_resource($proc)) {
+            fclose($pipes[0]);
+            stream_set_blocking($pipes[1], false);
+        } else {
+            $proc = null;
+        }
+    }
+
+    $mbps = measureAioStreamsThroughputMbps($finalUrl);
+
+    $durationOk = true;
+    if ($proc !== null) {
+        $out = '';
+        $deadline = microtime(true) + 8;
+        while (microtime(true) < $deadline) {
+            $read = [$pipes[1]];
+            $write = null;
+            $except = null;
+            if (@stream_select($read, $write, $except, 0, 200000) > 0) {
+                $out .= fread($pipes[1], 8192);
+            }
+            $st = proc_get_status($proc);
+            if (!$st['running'] && feof($pipes[1])) {
+                break;
+            }
+        }
+        @fclose($pipes[1]);
+        @proc_terminate($proc, 9); // SIGKILL: a stuck network read ignores SIGTERM and proc_close() would block
+        @proc_close($proc);
+        $duration = (float) trim($out);
+        if (!empty($GLOBALS['DEBUG'])) {
+            echo "aioProbeDurationAndThroughput: duration={$duration}s throughput=" . round($mbps, 2) . " Mbps</br></br>";
+        }
+        // 5 minutes - comfortably below any real movie/episode, safely above
+        // the ~2-minute placeholder clip actually observed.
+        $durationOk = !($duration > 0 && $duration < 300);
+    }
+    return [$durationOk, $mbps];
 }
 
 // Downloads a real, bounded chunk (up to 10MB, capped at 20s) from a
@@ -5121,13 +5302,18 @@ function fetchAioStreamsList($url) {
 
     global $aioStreamsProxy;
 
-    for ($attempt = 1; $attempt <= 2; $attempt++) {
-        $started = microtime(true);
+    // HEDGED fetch (fast start): the catalog answers in 0.5-13s direct but
+    // 15-45s through the proxy on a bad moment. Instead of waiting out one slow
+    // transfer and then retrying, a second identical request is started when
+    // the first has not answered after HEDGE_AFTER seconds (or at once if the
+    // first FAILED), and whichever returns HTTP 200 first wins; the other is
+    // cancelled. At most 3 requests, 45s overall.
+    $makeHandle = function () use ($url, $aioStreamsProxy) {
         $ch = curl_init($url);
         $opts = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_CONNECTTIMEOUT => 8,
             CURLOPT_TIMEOUT => 45,
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
@@ -5137,24 +5323,72 @@ function fetchAioStreamsList($url) {
             $opts[CURLOPT_PROXY] = trim($aioStreamsProxy);
         }
         curl_setopt_array($ch, $opts);
-        $body = curl_exec($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        return $ch;
+    };
+    $hedgeAfter = 5.0;
+    $maxRequests = 3;
 
-        if ($body !== false && $status === 200) {
-            if ($cachePath !== false) {
-                $tmp = $cachePath . '.' . getmypid() . '.tmp';
-                if (@file_put_contents($tmp, $body) !== false) {
-                    @rename($tmp, $cachePath);
-                }
+    $mh = curl_multi_init();
+    $active = [];
+    $launched = 0;
+    $lastLaunch = 0.0;
+    $launch = function () use (&$active, &$launched, &$lastLaunch, $mh, $makeHandle) {
+        $ch = $makeHandle();
+        curl_multi_add_handle($mh, $ch);
+        $active[] = $ch;
+        $launched++;
+        $lastLaunch = microtime(true);
+    };
+    $launch();
+    $deadline = microtime(true) + 45;
+    $body = false;
+    do {
+        $running = 0;
+        curl_multi_exec($mh, $running);
+        while (($info = curl_multi_info_read($mh)) !== false) {
+            if ($info['msg'] !== CURLMSG_DONE) {
+                continue;
             }
-            return $body;
+            $ch = $info['handle'];
+            $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $got = curl_multi_getcontent($ch);
+            if ($status === 200 && is_string($got) && $got !== '') {
+                $body = $got;
+                break 2;
+            }
+            // This attempt failed: replace it right away instead of waiting.
+            $key = array_search($ch, $active, true);
+            if ($key !== false) {
+                curl_multi_remove_handle($mh, $ch);
+                curl_close($ch);
+                unset($active[$key]);
+            }
+            if ($launched < $maxRequests && microtime(true) < $deadline) {
+                $launch();
+            }
         }
-        if (microtime(true) - $started > 20) {
+        if (empty($active)) {
             break;
         }
+        if ($launched < $maxRequests && count($active) === 1 && microtime(true) - $lastLaunch >= $hedgeAfter) {
+            $launch();
+        }
+        curl_multi_select($mh, 0.2);
+    } while (microtime(true) < $deadline);
+
+    foreach ($active as $ch) {
+        curl_multi_remove_handle($mh, $ch);
+        curl_close($ch);
     }
-    return false;
+    curl_multi_close($mh);
+
+    if ($body !== false && $cachePath !== false) {
+        $tmp = $cachePath . '.' . getmypid() . '.tmp';
+        if (@file_put_contents($tmp, $body) !== false) {
+            @rename($tmp, $cachePath);
+        }
+    }
+    return $body;
 }
 
 function frenchAioStreams($movieId, $title, $imdbId) {

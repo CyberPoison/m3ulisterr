@@ -33,6 +33,24 @@ function mockCdn($contentType) {
     }
 }
 
+// /catalog?k=<key>&mode=slow|fail : the FIRST request for a key sleeps 8s (slow) or answers 500 (fail),
+// every later one answers at once with a tiny catalog - what a hedged fetch is for.
+if ($path === '/catalog') {
+    $counter = sys_get_temp_dir() . '/mock_catalog_' . preg_replace('/\W/', '', $_GET['k'] ?? 'x');
+    $n = (int) @file_get_contents($counter);
+    file_put_contents($counter, (string) ($n + 1));
+    if ($n === 0 && ($_GET['mode'] ?? '') === 'slow') {
+        sleep(8);
+    }
+    if ($n === 0 && ($_GET['mode'] ?? '') === 'fail') {
+        http_response_code(500);
+        exit;
+    }
+    header('Content-Type: application/json');
+    echo '{"streams":[{"name":"ok"}]}';
+    exit;
+}
+
 switch ($path) {
     case '/fast':
         header('Location: ' . $base . '/cdn/video.mp4', true, 307);

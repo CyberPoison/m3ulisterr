@@ -1811,6 +1811,41 @@ function testSeekLandsNear($target, $videoUrl, $ffmpegPath, $ffprobePath) {
     return $actualPts !== null && $actualPts > 0 && abs($actualPts - $target) < 30;
 }
 
+// Runs testSeekLandsNear() for several targets at once and returns true only
+// when EVERY target lands near where it was asked to. stderr goes to temp
+// files (not pipes), so no probe can block on a full pipe while another is
+// being waited for.
+function testSeekLandsNearConcurrently(array $targets, $videoUrl, $ffmpegPath) {
+    $jobs = [];
+    foreach ($targets as $i => $target) {
+        $cmd = [$ffmpegPath, '-y', '-debug_ts', '-copyts', '-ss', (string) seekTargetWithMargin($target), '-i', $videoUrl, '-to', (string) ($target + 10), '-map', '0:v:0', '-c:v', 'copy', '-f', 'null', '-'];
+        $errFile = sys_get_temp_dir() . '/seek_probe_' . getmypid() . '_' . $i . '_' . mt_rand() . '.err';
+        $process = proc_open($cmd, [0 => ['pipe', 'r'], 1 => ['file', '/dev/null', 'a'], 2 => ['file', $errFile, 'w']], $pipes);
+        if (!is_resource($process)) {
+            foreach ($jobs as $j) {
+                @proc_terminate($j['process'], 9);
+                @proc_close($j['process']);
+                @unlink($j['err']);
+            }
+            return false;
+        }
+        fclose($pipes[0]);
+        $jobs[$i] = ['process' => $process, 'err' => $errFile, 'target' => $target];
+    }
+
+    $reliable = true;
+    foreach ($jobs as $job) {
+        proc_close($job['process']); // waits for this probe; the others keep running meanwhile
+        $stderr = (string) @file_get_contents($job['err']);
+        @unlink($job['err']);
+        $actualPts = extractRealFragmentStartPtsTime($stderr, 'video');
+        if (!($actualPts !== null && $actualPts > 0 && abs($actualPts - $job['target']) < 30)) {
+            $reliable = false;
+        }
+    }
+    return $reliable;
+}
+
 // Some releases ship an MKV whose seek index is internally corrupted or
 // incomplete - ffmpeg's own diagnosis for the classic case is literally
 // "File is broken, keyframes not correctly marked!". For those files, an
@@ -1860,16 +1895,18 @@ function isSeekReliable($videoUrl, $duration, $ffmpegPath, $ffprobePath) {
     // a long movie's index (if broken) doesn't get a pass just because the
     // test point happened to be early.
     $lateTarget = max(60, $duration * 0.3);
-    $reliable = testSeekLandsNear($lateTarget, $videoUrl, $ffmpegPath, $ffprobePath);
 
     // Only worth the extra probe if the source is long enough for this
     // early point to be meaningfully distinct from the late one already
     // tested, and short files aren't where this failure mode has been seen
-    // anyway.
-    if ($reliable && $duration > 60) {
-        $earlyTarget = 15.0;
-        $reliable = testSeekLandsNear($earlyTarget, $videoUrl, $ffmpegPath, $ffprobePath);
+    // anyway. The two probes are independent, so they run AT THE SAME TIME
+    // (the master playlist's cold start used to pay them back to back: ~2.5s
+    // each); the verdict is the same AND as before.
+    $targets = [$lateTarget];
+    if ($duration > 60) {
+        $targets[] = 15.0;
     }
+    $reliable = testSeekLandsNearConcurrently($targets, $videoUrl, $ffmpegPath);
 
     $cache[$cacheKey] = ['reliable' => $reliable, 'time' => time()];
     @file_put_contents($cacheFile, json_encode($cache));

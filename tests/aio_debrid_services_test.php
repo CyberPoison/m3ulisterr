@@ -37,11 +37,14 @@ function grabFunction($src, $name) {
 foreach ([
     'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
-    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk',
+    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList',
 ] as $fn) {
     eval(grabFunction($src, $fn));
 }
 $DEBUG = false;
+define('AIO_LIST_CACHE_TTL', 600);
+function aioListCacheDir() { return false; } // no cache: every call really fetches
+$aioStreamsProxy = '';
 
 function cand($debrid, $cached = true, $n = 0) {
     return ['debrid' => $debrid, 'cached' => $cached, 'url' => "https://x/$debrid/" . ($cached ? 'c' : 'u') . "/$n"];
@@ -183,6 +186,58 @@ check('in the same batch the good links still pass (fast + Real-Debrid)', $res[$
 
 $mbps = measureAioStreamsThroughputMbps($res[$u('/rd_force')]['finalUrl']);
 check(sprintf('throughput is measured against the resolved Real-Debrid CDN url (%.0f Mbps)', $mbps), $mbps > 5 && isAioStreamsThroughputOk($mbps, 8.0));
+
+
+// ---------------------------------------------------------------- fast start: progressive verification
+$t = microtime(true);
+$r = checkAioStreamsLinksPlayableBatchOnce([$u('/rd_slow'), $u('/fast')], [], 12, true, 1.0);
+$el = microtime(true) - $t;
+check(sprintf('early exit: a good link ranked 2nd is taken once the cold 1st is past its grace (%.1fs, not the 3s resolve)', $el),
+    $r[$u('/fast')]['ok'] && !empty($r[$u('/rd_slow')]['skipped']) && $el < 2.5);
+
+$t = microtime(true);
+$r = checkAioStreamsLinksPlayableBatchOnce([$u('/rd_slow'), $u('/fast')], [], 12, true, 6.0);
+$el = microtime(true) - $t;
+check(sprintf('early exit: ...but a longer grace waits for the better-ranked link and takes it (%.1fs)', $el),
+    $r[$u('/rd_slow')]['ok'] && empty($r[$u('/rd_slow')]['skipped']) && $el >= 2.5);
+
+$t = microtime(true);
+$r = checkAioStreamsLinksPlayableBatchOnce([$u('/slate'), $u('/fast'), $u('/hang')], [], 12, true, 3.0);
+$el = microtime(true) - $t;
+check(sprintf('early exit: slate rejected, 2nd link ok, the hanging 3rd is not waited for (%.1fs, not 8s+)', $el),
+    !$r[$u('/slate')]['ok'] && empty($r[$u('/slate')]['skipped']) && $r[$u('/fast')]['ok'] && !empty($r[$u('/hang')]['skipped']) && $el < 2.0);
+check('early exit: results keep the priority order of the urls', array_keys($r) === [$u('/slate'), $u('/fast'), $u('/hang')]);
+
+$r = checkAioStreamsLinksPlayableBatchOnce([$u('/slate'), $u('/e404')], [], 12, true, 3.0);
+check('early exit: when nothing is playable every link gets a real verdict (no skipped)',
+    !$r[$u('/slate')]['ok'] && !$r[$u('/e404')]['ok'] && empty($r[$u('/slate')]['skipped']) && empty($r[$u('/e404')]['skipped']));
+
+$t = microtime(true);
+$r = checkAioStreamsLinksPlayableBatch([$u('/hang')], [$u('/hang')], 1, 6, true)[$u('/hang')];
+$el = microtime(true) - $t;
+check(sprintf('early-exit batch does NOT retry a transient failure (%.1fs, the complete pass does that)', $el), !$r['ok'] && $r['transient'] && $el < 2.5);
+
+[$durOk, $mbps2] = aioProbeDurationAndThroughput($u('/rd_force'));
+check(sprintf('duration + throughput probe: unprobeable body is let through, throughput measured (%.0f Mbps)', $mbps2), $durOk === true && $mbps2 > 5);
+
+
+// ---------------------------------------------------------------- fast start: hedged catalog fetch
+$k = 'slow' . getmypid();
+@unlink(sys_get_temp_dir() . '/mock_catalog_' . $k);
+$t = microtime(true);
+$body = fetchAioStreamsList($u('/catalog?k=' . $k . '&mode=slow'));
+$el = microtime(true) - $t;
+check(sprintf('catalog: a stalled first request is overtaken by a second one after ~5s (%.1fs, not 8s)', $el),
+    is_string($body) && strpos($body, '"ok"') !== false && $el > 4.5 && $el < 7.5);
+
+$k = 'fail' . getmypid();
+@unlink(sys_get_temp_dir() . '/mock_catalog_' . $k);
+$t = microtime(true);
+$body = fetchAioStreamsList($u('/catalog?k=' . $k . '&mode=fail'));
+$el = microtime(true) - $t;
+check(sprintf('catalog: a failed first request is replaced immediately, not after a wait (%.1fs)', $el), is_string($body) && strpos($body, '"ok"') !== false && $el < 2);
+@unlink(sys_get_temp_dir() . '/mock_catalog_slow' . getmypid());
+@unlink(sys_get_temp_dir() . '/mock_catalog_fail' . getmypid());
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

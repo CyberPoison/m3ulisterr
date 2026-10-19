@@ -249,6 +249,13 @@ The following environment variables can be used to configure the container:
 
 # 🔄 Updates & Changelog
 
+### 📅 Update 10/19/2026
+
+**Fix: adult scenes with a short title ("The Pill") ended as an empty HTTP 200 / stream error instead of finding the right scene:**
+- **What was wrong (two things):** (1) the adult addon was searched with the bare title only. For a one- or two-word title the fuzzy store returns dozens of unrelated scenes ("The Boner Pill", "The Futa Pill"), those were probed on the debrid services, every file was then (correctly) rejected as a different title, and the real scene - listed as "Bibi Jones - The Pill" - never got a chance because its name scored 0.33 (the performer name counted as extra words). (2) `instantAvailability_PM()` crashed with an uncaught `TypeError` (`array_merge(): Argument #2 must be of type array, null given`) whenever Premiumize answered its cache check with an error (for example `{"status":"error","message":"Not logged in"}`); with `error_reporting(0)` that is an empty HTTP 200, which is exactly what a player reports as a stream error.
+- **Fix:** `adultAddonResolve()` now receives the catalog entry's `cast` and `director` (studio). For titles of at most two meaningful words, the addon is searched as "<performer> <title>" (first three performers) and "<studio> <title>" BEFORE the plain title, and the performer/studio words no longer count as extra words in the match score ("Bibi Jones - The Pill" now scores 1.0 against "The Pill", while a performer alone, or an unrelated "The Boner Pill", still does not match). `instantAvailability_PM()` now treats any answer without a usable `response` list as an error (logged in debug mode, falls through to the other services) and also uses the combined answer of all 100-hash chunks instead of only the last one.
+- **Verified:** locally, "The Pill" now finds the right scene's hash instead of two unrelated torrents, and a Premiumize authentication error no longer crashes the request; 6 new unit checks in `tests/adult_addon_test.php`, all suites pass. Note: whether the scene then plays depends on it being cached on a debrid service (in the local test Real-Debrid refuses that hash with `infringing_file` and the local Premiumize key is rejected).
+
 ### 📅 Update 10/09/2026
 
 **Fix: cold first segment of an English (HLS) stream could answer 5XX and show "Source Error" - the segment ffmpeg now retries once:**

@@ -59,6 +59,18 @@ check('title score: same words buried in a much longer title is below the cutoff
 check('title score: a different number is a different scene', adultAddonTitleScore('Women Seeking Women 122', 'Women Seeking Women #102 - Scene 2') == 0.0);
 check('title score: "Volume 58 - Scene 2" still matches 58', adultAddonTitleScore('Women Seeking Women 58', 'Women Seeking Women Volume 58 - Scene 2') >= ADULT_ADDON_MIN_TITLE_SCORE);
 check('title score: a spin-off ("- Interviews", one word off) is rejected', adultAddonTitleScore('Girl Lovin Girls', 'Girls Lovin Girls - Interviews') == 0.0);
+$pillCtx = ['cast' => 'April Oneil, Bibi Jones, Erik Everhard, Julia Ann', 'director' => 'Digital Playground'];
+$pillIgnore = adultAddonContextWords($pillCtx);
+check('context: a short title ("The Pill") is not matched to unrelated "The Boner Pill" scenes any better than before',
+    adultAddonTitleScore('The Pill', 'The Boner Pill', $pillIgnore) == adultAddonTitleScore('The Pill', 'The Boner Pill'));
+check('context: "Bibi Jones - The Pill" is the same scene once the performer is known (score 1.0, was 0.33)',
+    adultAddonTitleScore('The Pill', 'Bibi Jones - The Pill') < ADULT_ADDON_MIN_TITLE_SCORE
+    && adultAddonTitleScore('The Pill', 'Bibi Jones - The Pill', $pillIgnore) == 1.0);
+check('context: a performer alone is never a title match', adultAddonTitleScore('The Pill', 'Bibi Jones - Cheating Babe', $pillIgnore) == 0.0);
+check('context: short titles search performer/studio + title FIRST, then the plain variants',
+    adultAddonQueryVariants('The Pill', $pillCtx) === ['April Oneil The Pill', 'Bibi Jones The Pill', 'Erik Everhard The Pill', 'Digital Playground The Pill', 'The Pill']);
+check('context: long titles are unchanged by a context', adultAddonQueryVariants("Miss Jane's Big: Adventure In The Sun", $pillCtx) === adultAddonQueryVariants("Miss Jane's Big: Adventure In The Sun"));
+check('context: no context -> same variants as before', adultAddonQueryVariants('The Pill') === ['The Pill']);
 check('query variants: as-is, stripped, first four words',
     adultAddonQueryVariants("Miss Jane's Big: Adventure In The Sun") === ["Miss Jane's Big: Adventure In The Sun", 'Miss Jane s Big Adventure In The Sun', 'miss janes big adventure']);
 check('size parse GiB / MB', adultAddonParseSize('x 2.1 GiB y') === (int) (2.1 * 1073741824) && adultAddonParseSize('689,5 MB') === (int) (689.5 * 1048576));

@@ -992,7 +992,7 @@ function playAdultVideo($movieId) {
 		// the addon's own URL. If the addon is off, has no match, or has nothing
 		// cached, the original site-scraping below still runs.
 		if (adultAddonEnabled()) {
-			$addonLink = adultAddonResolve($details['name']);
+			$addonLink = adultAddonResolve($details['name'], ['cast' => $details['cast'] ?? '', 'director' => $details['director'] ?? '']);
 			if ($addonLink !== false) {
 				if ($GLOBALS['DEBUG']) {
 					echo "Service: Adult addon - Url: " . $addonLink . "</br></br>";
@@ -1849,18 +1849,26 @@ function instantAvailability_PM($hashes, $torrents){
 		foreach ($curlHandles as $ch) {
 			$response = curl_multi_getcontent($ch);
 			$availabilityData = json_decode($response, true);
-			$combinedAvailabilityData = array_merge($combinedAvailabilityData, $availabilityData['response']);
 			curl_multi_remove_handle($mh, $ch);
 			curl_close($ch);
+			// An error answer ({"status":"error","message":"Not logged in",...}),
+			// a timeout or garbage has no 'response' list. array_merge() on that
+			// used to be an uncaught TypeError: with error_reporting(0) the
+			// whole play.php request ended as an empty HTTP 200 (a player
+			// "stream error") instead of falling through to the other services.
+			if (!is_array($availabilityData) || !isset($availabilityData['response']) || !is_array($availabilityData['response'])) {
+				throw new Exception("Premiumize: no usable cache-check answer (" . substr((string) $response, 0, 120) . ")");
+			}
+			$combinedAvailabilityData = array_merge($combinedAvailabilityData, $availabilityData['response']);
 		}
 
 		curl_multi_close($mh);
 
-		if (count($hashes) !== count($availabilityData['response'])) {			
+		if (count($hashes) !== count($combinedAvailabilityData)) {			
 			throw new Exception("Premiumize: Mismatch in the number of hashes and response data");
 		}
 		
-		$hashAvailabilityMap = array_combine($hashes, $availabilityData['response']);
+		$hashAvailabilityMap = array_combine($hashes, $combinedAvailabilityData);
 
 		$torrents = array_filter($torrents, function($torrent) use ($hashAvailabilityMap) {
 			$hash = strtolower($torrent['hash']);			

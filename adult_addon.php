@@ -198,7 +198,7 @@ function adultAddonQualifierWord($w) {
 // words must be present, every number in the wanted title must appear in the
 // candidate ("... 122" is not "#102"), and extra words in the candidate lower
 // the score (Jaccard, after dropping scene/volume/resolution qualifiers).
-function adultAddonTitleScore($wanted, $candidate) {
+function adultAddonTitleScore($wanted, $candidate, array $ignoreWords = []) {
     $keep = function ($s) {
         return array_values(array_unique(array_filter(adultAddonWords($s), function ($w) {
             return !adultAddonQualifierWord($w);
@@ -206,6 +206,13 @@ function adultAddonTitleScore($wanted, $candidate) {
     };
     $a = $keep($wanted);
     $b = $keep($candidate);
+    // Performer / studio names the catalog already told us about ("Bibi Jones
+    // - The Pill") are not extra words: they are the same scene, named fuller.
+    if ($ignoreWords) {
+        $b = array_values(array_filter($b, function ($w) use ($ignoreWords, $a) {
+            return in_array($w, $a, true) || !in_array($w, $ignoreWords, true);
+        }));
+    }
     if (!$a || !$b) {
         return 0.0;
     }
@@ -223,8 +230,40 @@ function adultAddonTitleScore($wanted, $candidate) {
 
 // The title as-is, punctuation-free, and its first four words: recall on real
 // titles went from 45% to 60% with these three (measured on 20 random entries).
-function adultAddonQueryVariants($name) {
-    $variants = [trim($name), trim(preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $name))];
+// $context = ['cast' => 'A, B, C', 'director' => 'Studio'] from the catalog entry.
+// A one- or two-word title ("The Pill") matches dozens of unrelated scenes in
+// a fuzzy store, so for those the performer / studio are searched together
+// with it FIRST (measured: "Bibi Jones The Pill" finds the scene, "The Pill"
+// alone returns "The Boner Pill" and friends).
+function adultAddonContextNames(array $context) {
+    $names = [];
+    foreach (array_slice(array_filter(array_map('trim', explode(',', (string) ($context['cast'] ?? '')))), 0, 3) as $n) {
+        $names[] = $n;
+    }
+    $studio = trim((string) ($context['director'] ?? ''));
+    if ($studio !== '') {
+        $names[] = $studio;
+    }
+    return $names;
+}
+
+function adultAddonContextWords(array $context) {
+    $words = [];
+    foreach (adultAddonContextNames($context) as $n) {
+        $words = array_merge($words, adultAddonWords($n));
+    }
+    return array_values(array_unique($words));
+}
+
+function adultAddonQueryVariants($name, array $context = []) {
+    $variants = [];
+    if (count(adultAddonWords($name)) <= 2) {
+        foreach (adultAddonContextNames($context) as $n) {
+            $variants[] = $n . ' ' . trim($name);
+        }
+    }
+    $variants[] = trim($name);
+    $variants[] = trim(preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $name));
     $words = adultAddonWords($name);
     if (count($words) > 4) {
         $variants[] = implode(' ', array_slice($words, 0, 4));
@@ -292,13 +331,14 @@ function adultAddonRankCandidates(array $candidates) {
 // variant: every search catalog is asked at once, the best-matching items are
 // picked, and all their stream lists are fetched at once - so a lookup costs
 // two network round-trips per variant instead of one per request.
-function adultAddonFindCandidates($name, array $manifest) {
+function adultAddonFindCandidates($name, array $manifest, array $context = []) {
     $base = adultAddonBase();
     $catalogs = adultAddonSearchCatalogs($manifest);
     $candidates = [];
     $seenHash = [];
     $seenMeta = [];
-    foreach (adultAddonQueryVariants($name) as $query) {
+    $ignoreWords = adultAddonContextWords($context);
+    foreach (adultAddonQueryVariants($name, $context) as $query) {
         $searchUrls = [];
         foreach ($catalogs as $i => [$type, $catalogId]) {
             $searchUrls[$i] = $base . '/catalog/' . rawurlencode($type) . '/' . rawurlencode($catalogId) . '/search=' . rawurlencode($query) . '.json';
@@ -310,7 +350,7 @@ function adultAddonFindCandidates($name, array $manifest) {
             $scored = [];
             foreach ($results[$i]['metas'] ?? [] as $meta) {
                 $id = $meta['id'] ?? '';
-                $score = adultAddonTitleScore($name, $meta['name'] ?? '');
+                $score = adultAddonTitleScore($name, $meta['name'] ?? '', $ignoreWords);
                 if ($id !== '' && $score >= ADULT_ADDON_MIN_TITLE_SCORE && !isset($seenMeta[$id])) {
                     $scored[] = [$score, $meta];
                 }
@@ -396,7 +436,7 @@ function adultAddonDebridLink(array $candidates) {
 
 // Entry point used by playAdultVideo(): a playable debrid link for this
 // title's name, or false (addon off, nothing found, or nothing cached).
-function adultAddonResolve($name) {
+function adultAddonResolve($name, array $context = []) {
     if (!adultAddonEnabled()) {
         return false;
     }
@@ -408,7 +448,7 @@ function adultAddonResolve($name) {
         }
         return false;
     }
-    $candidates = adultAddonFindCandidates($name, $manifest);
+    $candidates = adultAddonFindCandidates($name, $manifest, $context);
     if ($debug) {
         echo 'Adult addon: ' . count($candidates) . ' torrent candidate(s) for ' . htmlspecialchars($name) . '</br></br>';
     }

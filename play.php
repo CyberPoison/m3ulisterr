@@ -985,6 +985,34 @@ function adultFetchPage($url) {
             echo 'Adult source page attempt failed (HTTP ' . $code . ', ' . (is_string($body) ? strlen($body) : 0) . 'B): ' . htmlspecialchars($attempt) . '</br></br>';
         }
     }
+    // Last attempt over IPv6. Measured on the production VPS: `curl` from the host
+    // reaches the page over IPv6 ("Trying [2606:4700:...]:443") while the PHP
+    // container is IPv4-only by default and gets Cloudflare's intermittent 525
+    // there. Costs nothing when the container has no IPv6 (fails at once).
+    if (defined('CURL_IPRESOLVE_V6')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 4,
+            CURLOPT_CONNECTTIMEOUT => 4,
+            CURLOPT_TIMEOUT => 9,
+            CURLOPT_ENCODING => '',
+            CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V6,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0',
+        ]);
+        $body = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body !== false && $code === 200 && strlen($body) > 2000) {
+            return $body;
+        }
+        if (!empty($GLOBALS['DEBUG'])) {
+            echo 'Adult source page IPv6 attempt failed (HTTP ' . $code . '): ' . htmlspecialchars($url) . '</br></br>';
+        }
+    }
     return false;
 }
 

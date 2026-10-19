@@ -136,14 +136,14 @@ $lines[] = '#EXT-X-ENDLIST';
 
 header('Content-Type: application/vnd.apple.mpegurl');
 header('Cache-Control: no-cache');
-echo implode("\n", $lines) . "\n";
+$playlistBody = implode("\n", $lines) . "\n";
+header('Content-Length: ' . strlen($playlistBody));
+echo $playlistBody;
 
 // Only reachable AFTER the client already has this (fixed-length-fallback)
 // playlist in hand - see scheduleKeyframeProbe() in hls_shared.php for why
 // the real, slow keyframe probe must never run before that point.
 if ($keyframeCacheWasCold) {
-    if (function_exists('fastcgi_finish_request')) {
-        fastcgi_finish_request();
-    }
+    finishResponseEarly();
     scheduleKeyframeProbe($videoUrl, $ffprobePath);
 }

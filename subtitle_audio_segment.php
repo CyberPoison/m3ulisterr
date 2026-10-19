@@ -216,9 +216,7 @@ echo $fragment;
 // getSourceDurationAndBitrate() pays a full fresh ffprobe spawn on a cold
 // cache (a newly-resolved candidate's first segment), which was blocking
 // the response before this.
-if (function_exists('fastcgi_finish_request')) {
-    fastcgi_finish_request();
-}
+finishResponseEarly();
 
 $probeResult = !empty($ffprobePath) ? getSourceDurationAndBitrate($videoUrl, $ffprobePath) : false;
 $budgetBytes = computeStreamCacheBudgetBytes($probeResult !== false ? $probeResult['bitRateBps'] : 0);

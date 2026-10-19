@@ -334,7 +334,9 @@ if (function_exists('m3uLogEvent')) {
 
 header('Content-Type: application/vnd.apple.mpegurl');
 header('Cache-Control: no-cache');
-echo implode("\n", $lines) . "\n";
+$playlistBody = implode("\n", $lines) . "\n";
+header('Content-Length: ' . strlen($playlistBody));
+echo $playlistBody;
 
 // Kicked off as early as possible, not left until subtitle_video_playlist.php
 // first asks for it - see scheduleKeyframeProbe() in hls_shared.php for why
@@ -350,8 +352,6 @@ echo implode("\n", $lines) . "\n";
 // changing anything about the fallback behavior itself for whichever
 // request the probe doesn't finish before.
 if (empty(getKeyframeTimestamps($videoUrl, $ffprobePath))) {
-    if (function_exists('fastcgi_finish_request')) {
-        fastcgi_finish_request();
-    }
+    finishResponseEarly();
     scheduleKeyframeProbe($videoUrl, $ffprobePath);
 }

@@ -43,6 +43,14 @@ $r = runFragmentedMp4Segment($cmd, $dir . '/out3.raw', $log, $dir . '/err3');
 check('a permanent failure is attempted exactly twice', $r['fragment'] === false && count(file($counter3)) === 2);
 check('...and reports both outcomes (' . ($r['outcome'] ?? '') . ')', ($r['outcome'] ?? '') === 'no_output_file_retry_no_output_file');
 
+
+// 4. a legitimately tiny (near-silent) fragment is a valid segment, not a failure
+$silentGen = escapeshellarg($ffmpeg) . ' -y -v error -f lavfi -i "anullsrc=r=48000:cl=stereo" -t 2 -c:a aac -b:a 192k -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof';
+$rawS = $dir . '/silent.raw';
+$r = runFragmentedMp4Segment(['sh', '-c', "$silentGen " . escapeshellarg($rawS)], $rawS, $log, $dir . '/errS');
+check('a tiny near-silent fragment (' . (is_string($r['fragment'] ?? false) ? strlen($r['fragment']) : 0) . ' bytes) is accepted (old 4 KB floor rejected it)',
+    $r['fragment'] !== false && strlen($r['fragment']) < 4096);
+
 shell_exec('rm -rf ' . escapeshellarg($dir));
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

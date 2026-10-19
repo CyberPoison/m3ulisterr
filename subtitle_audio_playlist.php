@@ -125,15 +125,15 @@ $lines[] = '#EXT-X-ENDLIST';
 
 header('Content-Type: application/vnd.apple.mpegurl');
 header('Cache-Control: no-cache');
-echo implode("\n", $lines) . "\n";
+$playlistBody = implode("\n", $lines) . "\n";
+header('Content-Length: ' . strlen($playlistBody));
+echo $playlistBody;
 
 // See subtitle_video_playlist.php for why this only ever runs AFTER the
 // client already has this response - and why a real player fetching BOTH
 // playlists for the same cold source relies on scheduleKeyframeProbe()'s
 // own lock to avoid running the same slow probe twice.
 if ($keyframeCacheWasCold) {
-    if (function_exists('fastcgi_finish_request')) {
-        fastcgi_finish_request();
-    }
+    finishResponseEarly();
     scheduleKeyframeProbe($videoUrl, $ffprobePath);
 }

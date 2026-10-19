@@ -926,6 +926,61 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
     }
 }
 
+// The catalog entry's own encoded source pages (adult-movies.json "sources"):
+// open each post page, pull the embed links and run the video extractors.
+// Returns the first playable video URL, or false. No caching, no output other
+// than debug lines - playAdultVideo() decides what happens next.
+function adultResolveFromSources(array $details) {
+    if (!isset($details['sources']) || !is_string($details['sources'])) {
+        if (!empty($GLOBALS['DEBUG'])) {
+            echo "No encoded sources found for adult video.</br></br>";
+        }
+        return false;
+    }
+    $sources = json_decode(base64_decode($details['sources']), true);
+    if (!is_array($sources)) {
+        if (!empty($GLOBALS['DEBUG'])) {
+            echo "Failed to decode sources string.</br></br>";
+        }
+        return false;
+    }
+    foreach ($sources as $source) {
+        $html = @file_get_contents($source);
+        if (!$html) {
+            continue;
+        }
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML($html);
+        libxml_clear_errors();
+        $xpath = new DOMXPath($dom);
+        $embedUrls = [];
+        foreach ($xpath->query('//div[@id="pettabs"]//a[@href]') as $node) {
+            $href = trim($node->getAttribute('href'));
+            if ($href !== '') {
+                $embedUrls[] = $href;
+            }
+        }
+        // Current site layout: no #pettabs block any more; the hoster list is a
+        // JSON array inside an HTML attribute - [{"u":"https://.../e/id","t":"iframe","l":"DoodStream"},...].
+        if (preg_match_all('/"u"\s*:\s*"(https?:[^"]+)"/', html_entity_decode($html, ENT_QUOTES | ENT_HTML5), $jsonEmbeds)) {
+            foreach ($jsonEmbeds[1] as $u) {
+                $embedUrls[] = str_replace('\\/', '/', $u);
+            }
+        }
+        foreach (array_values(array_unique($embedUrls)) as $embedUrl) {
+            $extractReturn = FindVideoExtractor($embedUrl, 'playAdultVideo', $embedUrl);
+            if ($GLOBALS['DEBUG']) {
+                echo "Adult source embed " . htmlspecialchars($embedUrl) . " -> " . ($extractReturn === false ? 'no video' : 'video found') . "</br></br>";
+            }
+            if ($extractReturn !== false) {
+                return $extractReturn;
+            }
+        }
+    }
+    return false;
+}
+
 function playAdultVideo($movieId) {
 	$key = $movieId . '_adult_url';
     try {
@@ -986,98 +1041,27 @@ function playAdultVideo($movieId) {
 		$GLOBALS['globalTitle'] = $details['name'];
 		$GLOBALS['logTitle'] = $details['name'];
 		
-		// Preferred path: look the title up through the configured Stremio addon
-		// ($adultAddonUrl, see adult_addon.php) and resolve it via debrid. Only a
-		// link that is already cached on a debrid service comes back, and never
-		// the addon's own URL. If the addon is off, has no match, or has nothing
-		// cached, the original site-scraping below still runs.
-		if (adultAddonEnabled()) {
-			$addonLink = adultAddonResolve($details['name'], ['cast' => $details['cast'] ?? '', 'director' => $details['director'] ?? '']);
-			if ($addonLink !== false) {
-				if ($GLOBALS['DEBUG']) {
-					echo "Service: Adult addon - Url: " . $addonLink . "</br></br>";
-					echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
-					writeToCache($key, $addonLink);
-					exit;
-				}
-				writeToCache($key, $addonLink);
-				header("HTTP/1.1 301 Moved Permanently");
-				header("Location: $addonLink");
+		// Order (explicit rule): the catalog's own .json source pages FIRST
+		// (adultResolveFromSources), and only when they give no playable video
+		// the configured Stremio addon ($adultAddonUrl, adult_addon.php), which
+		// only ever returns an already-cached debrid link, never its own URL.
+		$resolvedLink = adultResolveFromSources($details);
+		if ($resolvedLink === false && adultAddonEnabled()) {
+			if ($GLOBALS['DEBUG']) {
+				echo "No playable video from the .json sources - trying the adult addon.</br></br>";
+			}
+			$resolvedLink = adultAddonResolve($details['name'], ['cast' => $details['cast'] ?? '', 'director' => $details['director'] ?? '']);
+		}
+		if ($resolvedLink !== false) {
+			writeToCache($key, $resolvedLink);
+			if ($GLOBALS['DEBUG']) {
+				echo "Service: Adult Video - Url: " . $resolvedLink . "</br></br>";
+				echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
 				exit;
 			}
-			if ($GLOBALS['DEBUG']) {
-				echo "Adult addon found no cached source - falling back to the site scrapers.</br></br>";
-			}
-		}
-
-
-        if (!isset($details['sources']) || !is_string($details['sources'])) {
-            if ($GLOBALS['DEBUG']) {
-                echo "No encoded sources found for adult video.";
-            } else {
-                writeToCache($key, '_failed_', '3600', false);
-                m3uServeUnavailableNotice(); // exits
-            }
-            http_response_code(404);
-            exit();
-        }
-
-        $decoded = base64_decode($details['sources']);
-        $sources = json_decode($decoded, true);
-
-        if (!is_array($sources)) {
-            if ($GLOBALS['DEBUG']) {
-                echo "Failed to decode sources string.";
-            } else {
-                writeToCache($key, '_failed_', '3600', false);
-                m3uServeUnavailableNotice(); // exits
-            }
-            http_response_code(404);
-            exit();
-        }
-
-        foreach ($sources as $source) {
-				// Fetch the HTML of the post page
-				$html = @file_get_contents($source);
-				if (!$html) {
-						continue;
-				}
-
-				// Parse and extract all <a href> links inside #pettabs
-				$dom = new DOMDocument();
-				libxml_use_internal_errors(true);
-				$dom->loadHTML($html);
-				libxml_clear_errors();
-
-				$xpath = new DOMXPath($dom);
-				$nodes = $xpath->query('//div[@id="pettabs"]//a[@href]');
-
-				$embedLinks = [];
-				foreach ($nodes as $node) {
-						$href = trim($node->getAttribute('href'));
-						if (!empty($href)) {
-								$embedLinks[] = $href;
-						}
-				}
-
-				// Now run FindVideoExtractor on each extracted embed link
-				foreach ($embedLinks as $embedUrl) {
-						$extractReturn = FindVideoExtractor($embedUrl, 'playAdultVideo', $embedUrl);
-
-						if ($extractReturn !== false) {
-								if ($GLOBALS['DEBUG']) {
-										echo "Service: Adult Video - Url: " . $extractReturn . "</br></br>";
-										echo 'Debugging: Redirection to the video would have taken place here.</br></br>';
-										writeToCache($key, $extractReturn);
-										exit;
-								} else {
-										writeToCache($key, $extractReturn);
-										header("HTTP/1.1 301 Moved Permanently");
-										header("Location: $extractReturn");
-										exit;
-								}
-						}
-				}
+			header("HTTP/1.1 301 Moved Permanently");
+			header("Location: $resolvedLink");
+			exit;
 		}
 
 		if ($GLOBALS['DEBUG']) {

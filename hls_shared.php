@@ -930,7 +930,12 @@ function runFragmentedMp4SegmentOnce($cmd, $rawTmpPath, $ffmpegLogPath, $stderrC
     // size sanity check catches the failure modes that actually matter here
     // (ffmpeg dying early, an empty/truncated fragment) without needing to
     // reconstruct a temporary init+fragment file just to verify it.
-    if (strlen($fragment) <= 4096) {
+    // NOT a fixed "bigger than 4 KB" test: a legitimate near-silent AAC segment
+    // (end credits, a quiet scene) is only ~1-4 KB, and the old 4096-byte floor
+    // rejected those as invalid -> a 502 on the last audio segment of The Dark
+    // Knight / Toy Story 3 / Interstellar and on any silent stretch mid-film.
+    // A real fragment is a moof box followed by an mdat box with a payload.
+    if (strlen($fragment) < 128 || strpos($fragment, 'moof') === false || strpos($fragment, 'mdat') === false) {
         return ['fragment' => false, 'outcome' => 'invalid_fragment'];
     }
 
@@ -1536,6 +1541,30 @@ function getKeyframeTimestamps($videoUrl, $ffprobePath) {
     }
 
     return [];
+}
+
+// Lets the client finish while the script keeps working (background probes,
+// cache writes). Under PHP-FPM that is fastcgi_finish_request(). The production
+// image is php:8.2-apache (mod_php), which has no such function: the old
+// "if (function_exists('fastcgi_finish_request'))" guard silently did nothing
+// there, so the cold-start keyframe probe (a read of the WHOLE source file,
+// 30-60s) ran BEFORE the response ended - the first master/video/audio
+// playlist of every freshly resolved English title took 30-60s+ and players
+// gave up with "Source Error", while every later request answered in 0.6s.
+// Without FPM the client is released by the Content-Length header the caller
+// already sent: flush every buffer, keep running if the client disconnects.
+// REQUIRES a Content-Length header on the response.
+function finishResponseEarly() {
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+        return;
+    }
+    ignore_user_abort(true);
+    @set_time_limit(180);
+    while (ob_get_level() > 0) {
+        @ob_end_flush();
+    }
+    @flush();
 }
 
 // Call AFTER the response has already been sent to the client (immediately

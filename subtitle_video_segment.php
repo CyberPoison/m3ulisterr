@@ -325,9 +325,7 @@ echo $fragment;
 // player ever saw its bytes, on top of everything else already slow about a
 // cold request. Same fastcgi_finish_request() pattern already used for the
 // keyframe probe in hls_shared.php.
-if (function_exists('fastcgi_finish_request')) {
-    fastcgi_finish_request();
-}
+finishResponseEarly();
 
 // Keep this source's RAM footprint proportional to its own bitrate (higher-
 // bitrate remuxes get more headroom, since one segment of them is genuinely

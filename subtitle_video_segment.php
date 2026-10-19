@@ -39,6 +39,7 @@ ignore_user_abort(true);
 
 require_once 'config.php';
 require_once 'hls_shared.php';
+hlsExpandVideoParam();
 require_once 'm3ulisterr_lib.php';
 
 // Lightweight, size-bounded outcome log - the goal isn't verbose debugging,

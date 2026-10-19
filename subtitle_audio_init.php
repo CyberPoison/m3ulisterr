@@ -17,6 +17,7 @@ ob_end_clean();
 
 require_once 'config.php';
 require_once 'hls_shared.php';
+hlsExpandVideoParam();
 
 if (!isset($_GET['video']) || empty($_GET['video'])) {
     http_response_code(400);

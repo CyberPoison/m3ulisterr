@@ -21,6 +21,7 @@ ignore_user_abort(true);
 
 require_once 'config.php';
 require_once 'hls_shared.php';
+hlsExpandVideoParam();
 require_once 'm3ulisterr_lib.php';
 
 function logSegmentOutcome($kind, $start, $len, $outcome, $elapsedMs) {

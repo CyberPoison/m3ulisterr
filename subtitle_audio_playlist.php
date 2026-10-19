@@ -82,6 +82,7 @@ foreach ($segments as $seg) {
 }
 
 $videoEnc = urlencode($videoUrl);
+$vidRef = hlsVideoRef($videoUrl); // short reference for the per-segment lines, see hls_shared.php
 $codecEnc = urlencode($codec);
 
 // Which audio track of the source to serve, chosen by language up in
@@ -90,7 +91,7 @@ $codecEnc = urlencode($codec);
 // rendition's own init header describes a stream its segments aren't.
 $audioIndex = isset($_GET['aidx']) ? max(0, (int) $_GET['aidx']) : 0;
 
-$initUrl = 'subtitle_audio_init.mp4?video=' . $videoEnc . '&codec=' . $codecEnc . '&aidx=' . $audioIndex;
+$initUrl = 'subtitle_audio_init.mp4?vid=' . $vidRef . '&codec=' . $codecEnc . '&aidx=' . $audioIndex;
 if ($mediaTitle !== '') {
     $initUrl .= '&title=' . urlencode($mediaTitle);
 }
@@ -116,7 +117,7 @@ $lines[] = '#EXT-X-MAP:URI="' . $initUrl . '"';
 foreach ($segments as $seq => $seg) {
     list($start, $thisLen) = $seg;
     $lines[] = '#EXTINF:' . number_format($thisLen, 3, '.', '') . ',';
-    $lines[] = 'subtitle_audio_segment.m4s?video=' . $videoEnc . '&codec=' . $codecEnc
+    $lines[] = 'subtitle_audio_segment.m4s?vid=' . $vidRef . '&codec=' . $codecEnc
         . '&aidx=' . $audioIndex
         . '&start=' . number_format($start, 6, '.', '') . '&len=' . number_format($thisLen, 6, '.', '') . '&seq=' . $seq;
 }

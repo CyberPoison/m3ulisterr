@@ -85,8 +85,9 @@ foreach ($segments as $seg) {
 }
 
 $videoEnc = urlencode($videoUrl);
+$vidRef = hlsVideoRef($videoUrl); // short reference for the per-segment lines, see hls_shared.php
 
-$initUrl = 'subtitle_video_init.mp4?video=' . $videoEnc;
+$initUrl = 'subtitle_video_init.mp4?vid=' . $vidRef;
 if ($mediaTitle !== '') {
     $initUrl .= '&title=' . urlencode($mediaTitle);
 }
@@ -128,7 +129,7 @@ $lines[] = '#EXT-X-MAP:URI="' . $initUrl . '"';
 foreach ($segments as $seq => $seg) {
     list($start, $thisLen) = $seg;
     $lines[] = '#EXTINF:' . number_format($thisLen, 3, '.', '') . ',';
-    $lines[] = 'subtitle_video_segment.m4s?video=' . $videoEnc
+    $lines[] = 'subtitle_video_segment.m4s?vid=' . $vidRef
         . '&start=' . number_format($start, 6, '.', '') . '&len=' . number_format($thisLen, 6, '.', '') . '&seq=' . $seq;
 }
 

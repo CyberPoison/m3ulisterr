@@ -1543,6 +1543,52 @@ function getKeyframeTimestamps($videoUrl, $ffprobePath) {
     return [];
 }
 
+// SHORT REFERENCE for a source url inside HLS playlists. Every segment line
+// used to carry the whole urlencoded source url (~900 chars of AIOStreams
+// /playback/ link): a 2h film = 1300 segments = 1.3 MB per playlist, three
+// playlists (video + 2 audio) per start. MyTVOnline3 on a SHIELD choked on
+// them (heap at 55/61 MB, constant GC, UI thread blocked - 60-130s of spinner
+// while the server had already delivered the first segments in seconds). A
+// segment line now carries "vid=h<20 hex>" (~105 bytes per line, ~140 KB per
+// playlist) and the segment/init scripts look the url up again via
+// hlsExpandVideoParam(). The mapping is a tiny temp file refreshed on every use;
+// "video=<full url>" is still accepted everywhere (master playlist, old links).
+function hlsVideoRefPath($id) {
+    return sys_get_temp_dir() . '/hls_vidref_' . $id . '.txt';
+}
+
+function hlsVideoRef($videoUrl) {
+    $id = 'h' . substr(sha1($videoUrl), 0, 20);
+    $file = hlsVideoRefPath($id);
+    if (!is_file($file)) {
+        $tmp = $file . '.' . getmypid() . '.tmp';
+        if (@file_put_contents($tmp, $videoUrl) !== false) {
+            @rename($tmp, $file);
+        }
+    } else {
+        @touch($file);
+    }
+    if (mt_rand(1, 60) === 1) {
+        foreach (glob(sys_get_temp_dir() . '/hls_vidref_h*.txt') ?: [] as $f) {
+            if (time() - (int) @filemtime($f) > 2 * 86400) {
+                @unlink($f);
+            }
+        }
+    }
+    return $id;
+}
+
+function hlsExpandVideoParam() {
+    if (empty($_GET['video']) && !empty($_GET['vid']) && preg_match('/^h[0-9a-f]{20}$/', (string) $_GET['vid'])) {
+        $file = hlsVideoRefPath($_GET['vid']);
+        $url = @file_get_contents($file);
+        if (is_string($url) && $url !== '') {
+            $_GET['video'] = $url;
+            @touch($file);
+        }
+    }
+}
+
 // Where to send a client when HLS cannot be built for a source (no ffmpeg,
 // unreadable source, unreliable seek index). NEVER the raw source URL: an
 // AIOStreams /playback/ link is locked to the IP that first requested it (this

@@ -43,6 +43,9 @@ foreach ([
 }
 $hlsSrc = file_get_contents(__DIR__ . '/../hls_shared.php');
 eval(grabFunction($hlsSrc, 'plainVideoFallbackUrl'));
+foreach (['hlsVideoRefPath', 'hlsVideoRef', 'hlsExpandVideoParam'] as $fn) {
+    eval(grabFunction($hlsSrc, $fn));
+}
 $DEBUG = false;
 define('AIO_LIST_CACHE_TTL', 600);
 function aioListCacheDir() { return false; } // no cache: every call really fetches
@@ -262,6 +265,23 @@ check(sprintf('cache: ...and the check is bounded (%.1fs)', microtime(true) - $t
 $deadHls = $hlsFor($u('/slate'));
 check('FRESH result: an HLS url is accepted by checkLinkStatusCode even if its source would fail a check (a verified stream is never thrown away)', checkLinkStatusCode($deadHls) === true);
 check('cache: an HLS entry with no video param is still trusted', checkCachedLinkStatus('subtitle_track_playlist.m3u8?imdb=tt1') === true);
+
+
+// ---------------------------------------------------------------- short source reference in HLS playlists
+$longUrl = 'https://aiostreams.elfhosted.com/playback/' . str_repeat('AbCdEf0123_-', 70) . '/Movie%2520x264.mkv';
+$ref = hlsVideoRef($longUrl);
+check('hls ref: a ~900 char source url becomes a 21 char reference', preg_match('/^h[0-9a-f]{20}$/', $ref) === 1 && strlen($longUrl) > 800);
+check('hls ref: the same url always gives the same reference', hlsVideoRef($longUrl) === $ref);
+$_GET = ['vid' => $ref];
+hlsExpandVideoParam();
+check('hls ref: a segment request with only vid= gets the full source url back', ($_GET['video'] ?? '') === $longUrl);
+$_GET = ['vid' => 'hdeadbeefdeadbeefdead', 'video' => ''];
+hlsExpandVideoParam();
+check('hls ref: an unknown reference leaves video empty (request rejected as before)', ($_GET['video'] ?? '') === '');
+$_GET = ['video' => 'https://x/y.mkv', 'vid' => $ref];
+hlsExpandVideoParam();
+check('hls ref: an explicit video= (master playlist, old links) is never overridden', $_GET['video'] === 'https://x/y.mkv');
+@unlink(hlsVideoRefPath($ref));
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

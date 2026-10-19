@@ -1017,6 +1017,29 @@ function adultFetchPage($url) {
     return false;
 }
 
+// Remembered hoster links per source page (temp file, 7 days). Written every time a
+// page was read, read only when the page cannot be fetched.
+function adultEmbedCachePath($sourceUrl) {
+    return sys_get_temp_dir() . '/adult_embeds_' . md5($sourceUrl) . '.json';
+}
+
+function adultEmbedCacheWrite($sourceUrl, array $embedUrls) {
+    $file = adultEmbedCachePath($sourceUrl);
+    $tmp = $file . '.' . getmypid() . '.tmp';
+    if (@file_put_contents($tmp, json_encode(array_values($embedUrls))) !== false) {
+        @rename($tmp, $file);
+    }
+}
+
+function adultEmbedCacheRead($sourceUrl) {
+    $file = adultEmbedCachePath($sourceUrl);
+    if (!is_file($file) || time() - (int) @filemtime($file) > 7 * 86400) {
+        return [];
+    }
+    $list = json_decode((string) @file_get_contents($file), true);
+    return is_array($list) ? array_values(array_filter($list, 'is_string')) : [];
+}
+
 // The catalog entry's own encoded source pages (adult-movies.json "sources"):
 // open each post page, pull the embed links and run the video extractors.
 // Returns the first playable video URL, or false. No caching, no output other
@@ -1046,15 +1069,27 @@ function adultResolveFromSources(array $details) {
             return false;
         }
         $html = adultFetchPage($source);
+        $embedUrls = [];
+        $fromEmbedCache = false;
         if (!$html) {
-            continue;
+            // Source site down / blocked right now: reuse the hoster links found the
+            // last time this page was readable (kept 7 days), so films already seen
+            // keep playing through an outage of the source site.
+            $embedUrls = adultEmbedCacheRead($source);
+            if (empty($embedUrls)) {
+                continue;
+            }
+            $fromEmbedCache = true;
+            $html = '<html></html>';
+            if (!empty($GLOBALS['DEBUG'])) {
+                echo 'Adult source page unreachable - using ' . count($embedUrls) . ' remembered hoster links</br></br>';
+            }
         }
         $dom = new DOMDocument();
         libxml_use_internal_errors(true);
         $dom->loadHTML($html);
         libxml_clear_errors();
         $xpath = new DOMXPath($dom);
-        $embedUrls = [];
         foreach ($xpath->query('//div[@id="pettabs"]//a[@href]') as $node) {
             $href = trim($node->getAttribute('href'));
             if ($href !== '') {
@@ -1071,6 +1106,9 @@ function adultResolveFromSources(array $details) {
         // MixDrop first: it is the hoster that resolves reliably from every IP; the
         // others (Dood clones, LuluStream, VOE) mostly answer "no video" and cost time.
         $embedUrls = array_values(array_unique($embedUrls));
+        if (!$fromEmbedCache && $embedUrls) {
+            adultEmbedCacheWrite($source, $embedUrls);
+        }
         usort($embedUrls, function ($a, $b) {
             return (stripos($b, 'mixdrop') !== false ? 1 : 0) <=> (stripos($a, 'mixdrop') !== false ? 1 : 0);
         });
@@ -1142,7 +1180,7 @@ function playAdultVideo($movieId) {
 			if ($GLOBALS['DEBUG']) {
 				echo "Adult movie not found";
 			} else {
-				writeToCache($key, '_failed_', '3600', false);
+				writeToCache($key, '_failed_', '180', false);
 				m3uServeUnavailableNotice(); // exits
 			}
 			http_response_code(404);
@@ -1180,7 +1218,7 @@ function playAdultVideo($movieId) {
 		if ($GLOBALS['DEBUG']) {
 			echo "No valid sources found";
 		}  else {
-				writeToCache($key, '_failed_', '3600', false);
+				writeToCache($key, '_failed_', '180', false);
 				m3uServeUnavailableNotice(); // exits
 			}
 		http_response_code(404);
@@ -1189,13 +1227,13 @@ function playAdultVideo($movieId) {
 		if ($GLOBALS['DEBUG']) {
 			echo "Error: " . $e->getMessage();
 		}  else {
-			writeToCache($key, '_failed_', '3600', false);
+			writeToCache($key, '_failed_', '180', false);
 			m3uServeUnavailableNotice(); // exits
 		}
 		http_response_code(404);
         exit();
     }
-	writeToCache($key, '_failed_', '3600', false);
+	writeToCache($key, '_failed_', '180', false);
 	if (!$GLOBALS['DEBUG']) {
 		m3uServeUnavailableNotice(); // exits
 	}

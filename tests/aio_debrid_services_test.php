@@ -37,7 +37,7 @@ function grabFunction($src, $name) {
 foreach ([
     'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
-    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'adultPageAttemptUrls', 'adultFetchPage', 'aioNoteLimitSlates', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
+    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'adultPageAttemptUrls', 'adultFetchPage', 'adultEmbedCachePath', 'adultEmbedCacheWrite', 'adultEmbedCacheRead', 'aioNoteLimitSlates', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
 ] as $fn) {
     eval(grabFunction($src, $fn));
 }
@@ -312,6 +312,19 @@ $res = [
 $triggered = [];
 aioNoteLimitSlates($cs, $res);
 check('slates: only the RD link whose slate says "Debrid limit reached" triggers (not "Something went wrong", not a skipped link, not a non-slate failure)', $triggered === ['realdebrid']);
+
+
+// ---------------------------------------------------------------- adult: remembered hoster links
+$srcUrl = 'https://site.example/test-' . getmypid();
+@unlink(adultEmbedCachePath($srcUrl));
+check('embed cache: nothing remembered for an unknown page', adultEmbedCacheRead($srcUrl) === []);
+adultEmbedCacheWrite($srcUrl, ['https://mixdrop.ag/e/abc', 'https://voe.sx/e/def']);
+check('embed cache: the links of a readable page are remembered', adultEmbedCacheRead($srcUrl) === ['https://mixdrop.ag/e/abc', 'https://voe.sx/e/def']);
+touch(adultEmbedCachePath($srcUrl), time() - 8 * 86400);
+check('embed cache: a memory older than 7 days is ignored', adultEmbedCacheRead($srcUrl) === []);
+file_put_contents(adultEmbedCachePath($srcUrl), 'not json');
+check('embed cache: a corrupt file is ignored', adultEmbedCacheRead($srcUrl) === []);
+@unlink(adultEmbedCachePath($srcUrl));
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

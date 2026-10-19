@@ -9,6 +9,7 @@ require_once 'libs/JavaScriptUnpacker.php';
 require_once 'config.php';
 require_once 'm3ulisterr_lib.php';
 require_once 'debrid.php';
+require_once 'debrid_cleanup.php';
 require_once 'adult_addon.php';
 
 // Moved here, ahead of the previewBlock admin-preview block below (this used
@@ -1286,6 +1287,8 @@ function instantAvailability_RD($torrents, $tSite) {
         }
         
         if (!isset($added['id'])) {
+            // "too_many_active_downloads" / limit reached: the account is full (debrid_cleanup.php).
+            debridCleanupMaybeTrigger('realdebrid', json_encode($added), 'RD addMagnet');
             if ($DEBUG) echo "❌ Failed to add magnet to RD<br><br>";
             continue;
         }
@@ -1953,6 +1956,7 @@ function instantAvailability_PM($hashes, $torrents){
 			// whole play.php request ended as an empty HTTP 200 (a player
 			// "stream error") instead of falling through to the other services.
 			if (!is_array($availabilityData) || !isset($availabilityData['response']) || !is_array($availabilityData['response'])) {
+				debridCleanupMaybeTrigger('premiumize', (string) $response, 'PM cache check');
 				throw new Exception("Premiumize: no usable cache-check answer (" . substr((string) $response, 0, 120) . ")");
 			}
 			$combinedAvailabilityData = array_merge($combinedAvailabilityData, $availabilityData['response']);
@@ -2018,8 +2022,10 @@ function getStreamingLink_PM($torrents, $magnetLink, $tSite) {
 		echo "getStreamingLink_PM: raw response - " . htmlspecialchars((string) $response) . "</br></br>";
 	}
 
+	debridCleanupMaybeTrigger('premiumize', (string) $response, 'PM directdl');
+
 	if (isset($responseData['content'])) {
-		foreach ($responseData['content'] as $content) {			
+		foreach ($responseData['content'] as $content) {
 			if (isset($content['path']) && $type == 'series') {
 			
 				$strippedPath = preg_replace('/[^a-zA-Z0-9]/', '', $content['path']);
@@ -3754,6 +3760,22 @@ function aioAudioCompatRank($description, $filename = '') {
     return 1;
 }
 
+// A rejected AIOStreams link whose ElfHosted slate says the account is full
+// ("Debrid limit reached"): empty that debrid account (see debrid_cleanup.php).
+// The slate url carries the title as a query parameter; the candidate's own
+// service tag says which account it is. Only a slate counts - never a timeout.
+function aioNoteLimitSlates(array $candidates, array $results) {
+    foreach ($candidates as $c) {
+        $r = $results[$c['url']] ?? null;
+        if ($r === null || !empty($r['ok']) || !empty($r['skipped']) || empty($r['reason'])) {
+            continue;
+        }
+        if (stripos($r['reason'], 'slate.elfhosted.com') !== false && debridLimitReachedText($r['reason'])) {
+            debridCleanupMaybeTrigger(aioCandidateService($c), $r['reason'], 'AIOStreams slate');
+        }
+    }
+}
+
 // Normalizes a candidate's short debrid tag ('AD', 'PM', ...) to the same
 // lowercase key $aioDebridWeights (config.php) is keyed by.
 function aioCandidateService($candidate) {
@@ -4377,6 +4399,7 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
     $waveResults = checkAioStreamsLinksPlayableBatch(array_column($firstWave, 'url'), $slowOf($firstWave), 12, 25, true, $proxyMode ? 2 : 1);
     $aioTick('first wave: ' . count(array_filter($waveResults, function ($r) { return $r['ok']; })) . ' ok, ' . count(array_filter($waveResults, function ($r) { return !$r['ok'] && empty($r['skipped']); })) . ' rejected, ' . count(array_filter($waveResults, function ($r) { return !empty($r['skipped']); })) . ' not waited for');
 
+    aioNoteLimitSlates($firstWave, $waveResults);
     $needsFullCheck = [];
     foreach ($candidates as $candidate) {
         $url = $candidate['url'];
@@ -4407,6 +4430,7 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         $aioTick("round $round: checking " . count($needsFullCheck) . ' more candidate links (progressive)');
         $fullResults = checkAioStreamsLinksPlayableBatch(array_column($needsFullCheck, 'url'), $slowOf($needsFullCheck), 12, 25, true, 3);
         $aioTick("round $round: " . count(array_filter($fullResults, function ($r) { return $r['ok']; })) . ' ok, ' . count(array_filter($fullResults, function ($r) { return !$r['ok'] && empty($r['skipped']); })) . ' rejected, ' . count(array_filter($fullResults, function ($r) { return !empty($r['skipped']); })) . ' not waited for');
+        aioNoteLimitSlates($needsFullCheck, $fullResults);
         $nextRound = [];
         foreach ($needsFullCheck as $candidate) {
             $url = $candidate['url'];

@@ -37,12 +37,16 @@ function grabFunction($src, $name) {
 foreach ([
     'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
-    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'adultPageAttemptUrls', 'adultFetchPage', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
+    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'adultPageAttemptUrls', 'adultFetchPage', 'aioNoteLimitSlates', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
 ] as $fn) {
     eval(grabFunction($src, $fn));
 }
 $hlsSrc = file_get_contents(__DIR__ . '/../hls_shared.php');
 eval(grabFunction($hlsSrc, 'plainVideoFallbackUrl'));
+$cleanSrc = file_get_contents(__DIR__ . '/../debrid_cleanup.php');
+eval(grabFunction($cleanSrc, 'debridLimitReachedText'));
+$triggered = [];
+function debridCleanupMaybeTrigger($service, $text, $where = '') { global $triggered; $triggered[] = $service; return true; }
 foreach (['hlsVideoRefPath', 'hlsVideoRef', 'hlsExpandVideoParam'] as $fn) {
     eval(grabFunction($hlsSrc, $fn));
 }
@@ -294,6 +298,20 @@ check(sprintf('adult page: a first answer of 525 is retried and the page is retu
 $t = microtime(true);
 check(sprintf('adult page: an unreachable / error site gives false quickly, never a minutes-long hang (%.1fs)', microtime(true) - $t) , adultFetchPage($u('/e404')) === false && microtime(true) - $t < 12);
 @unlink(sys_get_temp_dir() . '/mock_flaky_' . $k);
+
+
+// ---------------------------------------------------------------- AIOStreams slates that say the account is full
+$slate = fn($title) => 'slate.elfhosted.com redirect - finalUrl=https://slate.elfhosted.com/cache/x/slate.mp4?preset=default&w=1280&h=720&title=' . urlencode($title) . '&body=x';
+$cs = [cand('RD', true, 1), cand('PM', true, 2), cand('RD', true, 3), cand('AD', true, 4)];
+$res = [
+    $cs[0]['url'] => ['ok' => false, 'reason' => $slate('Debrid limit reached')],
+    $cs[1]['url'] => ['ok' => false, 'reason' => $slate('Something went wrong')],
+    $cs[2]['url'] => ['ok' => false, 'skipped' => true, 'reason' => $slate('Debrid limit reached')],
+    $cs[3]['url'] => ['ok' => false, 'reason' => 'request failed - httpCode=0 limit reached (timeout text must not count)'],
+];
+$triggered = [];
+aioNoteLimitSlates($cs, $res);
+check('slates: only the RD link whose slate says "Debrid limit reached" triggers (not "Something went wrong", not a skipped link, not a non-slate failure)', $triggered === ['realdebrid']);
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

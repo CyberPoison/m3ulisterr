@@ -26,6 +26,8 @@
 if (!defined('DEBRID_PHP_LOADED')) {
     define('DEBRID_PHP_LOADED', 1);
 
+require_once __DIR__ . '/debrid_cleanup.php';
+
 /**
  * Returns the ordered, de-duplicated list of API keys for a debrid service.
  * Merges the legacy single-key config value (first) with the $debridApiKeys
@@ -117,6 +119,10 @@ function debridHttp($url, $method = 'GET', $postFields = null, $headers = [], $t
     $body = curl_exec($ch);
     $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
+    // An account-is-full answer from a service empties that account (debrid_cleanup.php).
+    if (is_string($body) && $body !== '') {
+        debridCleanupMaybeTrigger(debridServiceFromUrl($url), $body, 'debridHttp');
+    }
     return [$code, $body];
 }
 

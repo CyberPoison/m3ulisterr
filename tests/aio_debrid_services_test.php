@@ -37,7 +37,7 @@ function grabFunction($src, $name) {
 foreach ([
     'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
-    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
+    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'adultPageAttemptUrls', 'adultFetchPage', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
 ] as $fn) {
     eval(grabFunction($src, $fn));
 }
@@ -282,6 +282,18 @@ $_GET = ['video' => 'https://x/y.mkv', 'vid' => $ref];
 hlsExpandVideoParam();
 check('hls ref: an explicit video= (master playlist, old links) is never overridden', $_GET['video'] === 'https://x/y.mkv');
 @unlink(hlsVideoRefPath($ref));
+
+
+// ---------------------------------------------------------------- adult source pages: robust fetch
+check('adult page: https url -> [https, http twin, https again]', adultPageAttemptUrls('https://site.example/a') === ['https://site.example/a', 'http://site.example/a', 'https://site.example/a']);
+check('adult page: http url -> [http, http]', adultPageAttemptUrls('http://site.example/a') === ['http://site.example/a', 'http://site.example/a']);
+$k = 'p' . getmypid(); @unlink(sys_get_temp_dir() . '/mock_flaky_' . $k);
+$t = microtime(true);
+$html = adultFetchPage($u('/flaky525?k=' . $k));
+check(sprintf('adult page: a first answer of 525 is retried and the page is returned (%.1fs)', microtime(true) - $t), is_string($html) && strpos($html, 'pettabs') !== false && microtime(true) - $t < 5);
+$t = microtime(true);
+check(sprintf('adult page: an unreachable / error site gives false quickly, never a minutes-long hang (%.1fs)', microtime(true) - $t) , adultFetchPage($u('/e404')) === false && microtime(true) - $t < 12);
+@unlink(sys_get_temp_dir() . '/mock_flaky_' . $k);
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

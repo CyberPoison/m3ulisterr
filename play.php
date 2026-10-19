@@ -940,11 +940,64 @@ function seriesDetails_TMDB($movieId, $apiKey, $useRealDebrid, $episodeData)
     }
 }
 
+// Page attempts for a catalog source page. The source site sits behind Cloudflare
+// and its https answers an intermittent 525 (Cloudflare cannot complete TLS with
+// the origin) for some client IPs - measured: this server got "Failed to open
+// URL" after 11s on https while the plain-http url of the same page answered 200
+// in 0.9s. So: the url as given, then its http:// twin, then the url once more.
+function adultPageAttemptUrls($url) {
+    $attempts = [$url];
+    if (stripos($url, 'https://') === 0) {
+        $attempts[] = 'http://' . substr($url, 8);
+    }
+    $attempts[] = $url;
+    return $attempts;
+}
+
+// Fetches one source page with short timeouts (the old @file_get_contents had
+// none: a blocked/slow site held the request for minutes). Returns the HTML or false.
+function adultFetchPage($url) {
+    global $HTTP_PROXY, $USE_HTTP_PROXY;
+    foreach (adultPageAttemptUrls($url) as $attempt) {
+        $ch = curl_init($attempt);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 4,
+            CURLOPT_CONNECTTIMEOUT => 4,
+            CURLOPT_TIMEOUT => 9,
+            CURLOPT_ENCODING => '',
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_HTTPHEADER => ['Accept: text/html,application/xhtml+xml,*/*;q=0.8', 'Accept-Language: en-US,en;q=0.5'],
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0',
+        ]);
+        if (!empty($USE_HTTP_PROXY) && !empty($HTTP_PROXY)) {
+            curl_setopt($ch, CURLOPT_PROXY, $HTTP_PROXY);
+        }
+        $body = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body !== false && $code === 200 && strlen($body) > 2000) {
+            return $body;
+        }
+        if (!empty($GLOBALS['DEBUG'])) {
+            echo 'Adult source page attempt failed (HTTP ' . $code . ', ' . (is_string($body) ? strlen($body) : 0) . 'B): ' . htmlspecialchars($attempt) . '</br></br>';
+        }
+    }
+    return false;
+}
+
 // The catalog entry's own encoded source pages (adult-movies.json "sources"):
 // open each post page, pull the embed links and run the video extractors.
 // Returns the first playable video URL, or false. No caching, no output other
 // than debug lines - playAdultVideo() decides what happens next.
 function adultResolveFromSources(array $details) {
+    // Diagnosis switch (only with &dev=true): skip the catalog sources to exercise the addon path alone.
+    if (!empty($GLOBALS['DEBUG']) && !empty($_GET['skipsources'])) {
+        echo "Adult sources skipped (skipsources=1)</br></br>";
+        return false;
+    }
     if (!isset($details['sources']) || !is_string($details['sources'])) {
         if (!empty($GLOBALS['DEBUG'])) {
             echo "No encoded sources found for adult video.</br></br>";
@@ -958,8 +1011,12 @@ function adultResolveFromSources(array $details) {
         }
         return false;
     }
+    $sourcesStart = microtime(true);
     foreach ($sources as $source) {
-        $html = @file_get_contents($source);
+        if (microtime(true) - $sourcesStart > 40) {
+            return false;
+        }
+        $html = adultFetchPage($source);
         if (!$html) {
             continue;
         }
@@ -982,7 +1039,20 @@ function adultResolveFromSources(array $details) {
                 $embedUrls[] = str_replace('\\/', '/', $u);
             }
         }
-        foreach (array_values(array_unique($embedUrls)) as $embedUrl) {
+        // MixDrop first: it is the hoster that resolves reliably from every IP; the
+        // others (Dood clones, LuluStream, VOE) mostly answer "no video" and cost time.
+        $embedUrls = array_values(array_unique($embedUrls));
+        usort($embedUrls, function ($a, $b) {
+            return (stripos($b, 'mixdrop') !== false ? 1 : 0) <=> (stripos($a, 'mixdrop') !== false ? 1 : 0);
+        });
+        foreach ($embedUrls as $embedUrl) {
+            // Time budget for the whole source step: a player will not wait for more.
+            if (microtime(true) - $sourcesStart > 40) {
+                if (!empty($GLOBALS['DEBUG'])) {
+                    echo "Adult sources: time budget (40s) used up</br></br>";
+                }
+                return false;
+            }
             $extractReturn = FindVideoExtractor($embedUrl, 'playAdultVideo', $embedUrl);
             if ($GLOBALS['DEBUG']) {
                 echo "Adult source embed " . htmlspecialchars($embedUrl) . " -> " . ($extractReturn === false ? 'no video' : 'video found') . "</br></br>";

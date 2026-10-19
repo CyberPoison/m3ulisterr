@@ -62,6 +62,20 @@ if ($path === '/video_proxy.php') {
     exit;
 }
 
+// /flaky525?k=<key>: first request answers 525 (Cloudflare "SSL handshake failed"), later ones a 5 KB page.
+if ($path === '/flaky525') {
+    $counter = sys_get_temp_dir() . '/mock_flaky_' . preg_replace('/\W/', '', $_GET['k'] ?? 'x');
+    $n = (int) @file_get_contents($counter);
+    file_put_contents($counter, (string) ($n + 1));
+    if ($n === 0) {
+        http_response_code(525);
+        exit;
+    }
+    header('Content-Type: text/html');
+    echo '<html><body><div id="pettabs"><a href="https://mixdrop.ag/e/abc">x</a></div>' . str_repeat('<p>filler</p>', 400) . '</body></html>';
+    exit;
+}
+
 switch ($path) {
     case '/fast':
         header('Location: ' . $base . '/cdn/video.mp4', true, 307);

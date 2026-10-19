@@ -249,6 +249,13 @@ The following environment variables can be used to configure the container:
 
 # 🔄 Updates & Changelog
 
+### 📅 Update 10/20/2026
+
+**Resilience: the whole ElfHosted AIOStreams service answered HTTP 500 "Could not insert/update bucket" (every endpoint, even `/api/v1/status` with no configuration) - titles that were not already resolved could not start:**
+- **Measured on 10/20 ~00:20 (from the dev machine AND from production):** `/manifest.json`, `/stream/...`, `/catalog/...`, `/subtitles/...` and the public status endpoint all returned 500; the resolver's catalog fetch failed in 0.3s, the code fell through every torrent scraper and the title ended in the "not available" notice (Godzilla x Kong, The Matrix, Pulp Fiction ... anything not cached). Not a code fault.
+- **Stale fallback:** `fetchAioStreamsList()` now keeps the last catalog it fetched for each query for 6 hours (was swept after 10 minutes) and returns it when a fresh fetch fails. Its `/playback/` links usually still resolve and the normal link verification rejects any that died. Debug traces say "AIOStreams catalog unreachable - using the stale copy from N minutes ago". 3 unit checks (none remembered -> false, 2h copy used, 7h copy not used).
+- **Blocked releases:** new `aioBlockedReleaseWords()` / `aioBlockedReleaseMatch()` - release names never offered by the AIOStreams resolver (case-insensitive substrings, e.g. a release group). `realDMDJ` is built in: its Godzilla x Kong release (Ita/Eng AC3) stalled after the first 2-3 segments in BOTH Android players on a SHIELD (MyTVOnline3 and VLC Android, which plays other titles to the end) while desktop VLC plays it, its segments are well-formed (every segment starts on a keyframe, audio/video timestamps within 0.1s of the playlist), and its link had already died once; the same title with another release played in the app. Add more with `$aioBlockedReleaseWords = ['GroupName', ...];` in config.php (host file, no redeploy). 3 unit checks.
+
 ### 📅 Update 10/19/2026
 
 **Fix (the real blocker for adult films AND a hidden cost for French): `checkVideoProxyUpstreamAlive()` condemned every `video_proxy.php` link in production because the server called its OWN public address:**

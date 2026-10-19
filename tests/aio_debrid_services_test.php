@@ -37,7 +37,7 @@ function grabFunction($src, $name) {
 foreach ([
     'aioCandidateService', 'aioAudioCompatRank', 'aioVideoIsHeavy', 'aioPickWeightedService', 'aioPickVerificationWindow', 'aioServiceResolvesSlowly',
     'checkAioStreamsLinksPlayableBatchOnce', 'checkAioStreamsLinksPlayableBatch',
-    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'adultPageAttemptUrls', 'adultFetchPage', 'adultEmbedCachePath', 'adultEmbedCacheWrite', 'adultEmbedCacheRead', 'aioNoteLimitSlates', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
+    'measureAioStreamsThroughputMbps', 'isAioStreamsThroughputOk', 'aioProbeDurationAndThroughput', 'fetchAioStreamsList', 'aioBlockedReleaseWords', 'aioBlockedReleaseMatch', 'adultPageAttemptUrls', 'adultFetchPage', 'adultEmbedCachePath', 'adultEmbedCacheWrite', 'adultEmbedCacheRead', 'aioNoteLimitSlates', 'checkLinkStatusCode', 'checkCachedLinkStatus', 'aioCachedSourceStillAlive', 'checkVideoProxyUpstreamAlive', 'wrapWithVideoProxy',
 ] as $fn) {
     eval(grabFunction($src, $fn));
 }
@@ -52,7 +52,9 @@ foreach (['hlsVideoRefPath', 'hlsVideoRef', 'hlsExpandVideoParam'] as $fn) {
 }
 $DEBUG = false;
 define('AIO_LIST_CACHE_TTL', 600);
-function aioListCacheDir() { return false; } // no cache: every call really fetches
+$aioTestCacheDir = sys_get_temp_dir() . '/aio_test_cache_' . getmypid();
+@mkdir($aioTestCacheDir);
+function aioListCacheDir() { global $aioTestCacheDir; return $aioTestCacheDir; }
 $aioStreamsProxy = '';
 
 function cand($debrid, $cached = true, $n = 0) {
@@ -337,6 +339,29 @@ check('proxy link: the Referer in the link is sent (upstream answers 403 without
 $wrapped = wrapWithVideoProxy($u('/fast'));
 check('proxy link (wrapWithVideoProxy form url=...&auto=1&data=|): live is alive, 404 is dead', checkVideoProxyUpstreamAlive($wrapped) === true && checkVideoProxyUpstreamAlive(wrapWithVideoProxy($u('/e404'))) === false);
 check('proxy link: unreadable / non-http content is not condemned', checkVideoProxyUpstreamAlive('video_proxy.php?data=' . base64_encode('ftp://x/y')) === true && checkVideoProxyUpstreamAlive('video_proxy.php') === true);
+
+
+// ---------------------------------------------------------------- blocked releases
+check('blocked release: the built-in realDMDJ is matched in a filename, case-insensitively', aioBlockedReleaseMatch('Godzilla e Kong Il Nuovo Impero 2024 Ita Eng AC3 5.1 Sub Ita realDMDJ.mkv') === 'realDMDJ' && aioBlockedReleaseMatch('x.REALDMDJ.mkv') === 'realDMDJ');
+check('blocked release: a normal release is not matched', aioBlockedReleaseMatch('Godzilla x Kong The New Empire (2024) 1080p BDRip x264-GROUP.mkv') === null && aioBlockedReleaseMatch('') === null);
+$aioBlockedReleaseWords = ['BadGroup', '  ', 7];
+check('blocked release: words from $aioBlockedReleaseWords (config.php) are added, junk entries ignored', aioBlockedReleaseMatch('Movie.2020.1080p.BADGROUP.mkv') === 'BadGroup' && aioBlockedReleaseWords() === ['realDMDJ', 'BadGroup']);
+unset($aioBlockedReleaseWords);
+
+
+// ---------------------------------------------------------------- catalog: stale copy when the instance is down
+$deadUrl = $u('/e404') . '?q=stale' . getmypid();
+$cacheFile = $aioTestCacheDir . '/' . md5($deadUrl) . '.json';
+@unlink($cacheFile);
+check('catalog down and nothing remembered: fetch fails (false)', fetchAioStreamsList($deadUrl) === false);
+file_put_contents($cacheFile, '{"streams":[{"name":"old"}]}');
+touch($cacheFile, time() - 2 * 3600);
+$t = microtime(true);
+$got = fetchAioStreamsList($deadUrl);
+check(sprintf('catalog down: the 2-hour-old copy is used instead of failing (%.1fs)', microtime(true) - $t), is_string($got) && strpos($got, '"old"') !== false);
+touch($cacheFile, time() - 7 * 3600);
+check('catalog down: a copy older than 6 hours is NOT used', fetchAioStreamsList($deadUrl) === false);
+@unlink($cacheFile);
 
 echo $failures ? "\n$failures FAILED\n" : "\nALL PASSED\n";
 exit($failures ? 1 : 0);

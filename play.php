@@ -3837,6 +3837,36 @@ function aioAudioCompatRank($description, $filename = '') {
     return 1;
 }
 
+// Release names (case-insensitive substrings, usually a release group) that are never
+// offered by the AIOStreams resolver. Built-in list + the optional $aioBlockedReleaseWords
+// array in config.php (a host file: add entries there without redeploying).
+// Why 'realDMDJ' is built in: its Godzilla x Kong release (Ita/Eng AC3) played fine in
+// desktop VLC but stalled after the first 2-3 segments in BOTH Android players on a
+// SHIELD (MyTVOnline3 and VLC Android, which plays other titles to the end), and its
+// link had already died once - the same title with another release played in the app.
+function aioBlockedReleaseWords() {
+    global $aioBlockedReleaseWords;
+    $words = ['realDMDJ'];
+    if (isset($aioBlockedReleaseWords) && is_array($aioBlockedReleaseWords)) {
+        foreach ($aioBlockedReleaseWords as $w) {
+            if (is_string($w) && trim($w) !== '') {
+                $words[] = trim($w);
+            }
+        }
+    }
+    return $words;
+}
+
+// The blocked word found in $text, or null.
+function aioBlockedReleaseMatch($text) {
+    foreach (aioBlockedReleaseWords() as $w) {
+        if (stripos($text, $w) !== false) {
+            return $w;
+        }
+    }
+    return null;
+}
+
 // A rejected AIOStreams link whose ElfHosted slate says the account is full
 // ("Debrid limit reached"): empty that debrid account (see debrid_cleanup.php).
 // The slate url carries the title as a query parameter; the candidate's own
@@ -4112,6 +4142,15 @@ function aioStreamsFindAudioLanguage($movieId, $languageName, $proxyMode = false
         // which service actually served each movie.
         $debridService = preg_match('/\[([A-Za-z]{2,4})\s*[\x{26A1}\x{23F3}]/u', $streamName, $svcMatch) ? strtoupper($svcMatch[1]) : '';
         $releaseFilename = $stream['behaviorHints']['filename'] ?? '';
+
+        // Releases known to misbehave (see aioBlockedReleaseWords()): never offered.
+        $blockedBy = aioBlockedReleaseMatch($releaseFilename . ' ' . ($stream['name'] ?? ''));
+        if ($blockedBy !== null) {
+            if ($DEBUG) {
+                echo "Skipped (release blocked by '$blockedBy') $languageName candidate via $tSite: $releaseFilename</br></br>";
+            }
+            continue;
+        }
 
         // A torrent can bundle an entire saga in one file per movie (e.g. a
         // "Harry.Potter.L.Integrale.Des.8.Films..." pack) - AIOStreams' own
@@ -5551,11 +5590,13 @@ function fetchAioStreamsList($url) {
     $dir = aioListCacheDir();
     $cachePath = $dir !== false ? $dir . '/' . md5($url) . '.json' : false;
 
-    // Occasional cheap sweep of entries past their TTL so /dev/shm doesn't grow
-    // unbounded over a long uptime (each entry is ~160KB).
+    // Occasional cheap sweep so /dev/shm doesn't grow unbounded over a long uptime
+    // (each entry is ~160KB). Entries are kept 6 hours - far past the 10-minute
+    // freshness TTL - because they are also the STALE FALLBACK used when the
+    // AIOStreams instance is down (see the end of this function).
     if ($dir !== false && mt_rand(1, 40) === 1) {
         foreach (glob($dir . '/*.json') ?: [] as $f) {
-            if (time() - @filemtime($f) > AIO_LIST_CACHE_TTL) {
+            if (time() - @filemtime($f) > 6 * 3600) {
                 @unlink($f);
             }
         }
@@ -5654,6 +5695,22 @@ function fetchAioStreamsList($url) {
         $tmp = $cachePath . '.' . getmypid() . '.tmp';
         if (@file_put_contents($tmp, $body) !== false) {
             @rename($tmp, $cachePath);
+        }
+    }
+
+    // STALE FALLBACK: the AIOStreams instance is down (measured 10/20: the whole ElfHosted
+    // service answered HTTP 500 "Could not insert/update bucket" - even its /api/v1/status -
+    // and every title that was not already resolved failed). The last catalog this server
+    // fetched for the same query (up to 6 hours old) is better than nothing: its
+    // /playback/ links usually still resolve, and the link verification that follows
+    // rejects any that died, exactly as for a fresh catalog.
+    if ($body === false && $cachePath !== false && is_file($cachePath) && (time() - filemtime($cachePath)) < 6 * 3600) {
+        $stale = @file_get_contents($cachePath);
+        if ($stale !== false && $stale !== '') {
+            if (!empty($GLOBALS['DEBUG'])) {
+                echo 'AIOStreams catalog unreachable - using the stale copy from ' . (int) ((time() - filemtime($cachePath)) / 60) . ' minutes ago</br></br>';
+            }
+            return $stale;
         }
     }
     return $body;

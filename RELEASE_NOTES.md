@@ -4,6 +4,12 @@
 <details><summary><b>🌐 English Changelog</b></summary>
 
 
+### 📅 Update 10/22/2026 (subtitles)
+
+**Fix: the subtitle track showed up in MyTVOnline3 but displayed nothing.**
+- **Cause:** the OpenSubtitles proxy (`opensubtitles.stremio.homes`) serves two WebVTT documents glued together (an advertisement cue under a first `WEBVTT`, then a second `WEBVTT`, a UTF-8 BOM and the real cues). VLC tolerates it, ExoPlayer lists the track but renders no cue.
+- **Fix:** `subtitle_vtt_segment.php` now fetches the file, normalises it with `hlsCleanWebVtt()` (single header, no ad cue, no BOM, LF endings) and serves it as `text/vtt`, cached for a day; if the upstream cannot be fetched it falls back to the previous redirect. Verified locally on the real Black Widow subtitle: 1298 cues, one header; `tests/webvtt_clean_test.php` covers the cleaner. The first fetch of a title costs one upstream round trip (about 14 s measured), later ones 0.1 s.
+
 ### 📅 Update 10/22/2026
 
 **Fix: an HLS master playlist that answered nothing for 45-150 s right after a cold one (measured on production, Oppenheimer and Age of Ultron, then reproduced twice in a row).**

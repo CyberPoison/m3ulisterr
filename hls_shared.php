@@ -578,6 +578,40 @@ function srtToVtt($text) {
 // handful of views. Returns false when the quota is spent, the token has
 // expired, or the fetch fails - the caller serves an empty cue list rather
 // than breaking playback over a missing subtitle.
+// Normalises a WebVTT file coming from a third-party subtitle proxy into one that every HLS player
+// accepts. The opensubtitles.stremio.homes files are TWO documents glued together: a first "WEBVTT" with
+// an advertisement cue ("header" / ">>OpenSubtitles v3+ ...<<"), then a second "WEBVTT" line, a UTF-8 BOM
+// and the real cues. ExoPlayer (MyTVOnline3) shows the track in its menu but renders nothing from such a
+// file; VLC tolerates it. Result: one header, no ad cue, no BOM, LF endings, blank-line separated cues.
+function hlsCleanWebVtt($raw) {
+    $raw = (string) $raw;
+    $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw);
+    $raw = str_replace(["\r\n", "\r"], "\n", $raw);
+    $raw = str_replace("\xEF\xBB\xBF", '', $raw);
+    $blocks = preg_split('/\n{2,}/', trim($raw));
+    $cues = [];
+    foreach ($blocks as $block) {
+        $block = trim($block, "\n");
+        if ($block === '') {
+            continue;
+        }
+        $lines = explode("\n", $block);
+        // Header blocks ("WEBVTT", "WEBVTT - title", NOTE / STYLE / REGION) carry no cue.
+        if (preg_match('/^(WEBVTT|NOTE|STYLE|REGION)\b/', $lines[0])) {
+            continue;
+        }
+        if (strpos($block, '-->') === false) {
+            continue;
+        }
+        // The proxy advertisement cue.
+        if (stripos($block, 'OpenSubtitles v3') !== false && count($lines) <= 4) {
+            continue;
+        }
+        $cues[] = $block;
+    }
+    return "WEBVTT\n\n" . implode("\n\n", $cues) . ($cues ? "\n" : '');
+}
+
 function openSubtitlesFetchVtt($fileId) {
     global $openSubtitlesApiKey, $openSubtitlesApiToken;
 

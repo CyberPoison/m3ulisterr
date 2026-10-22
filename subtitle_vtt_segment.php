@@ -68,5 +68,47 @@ if (function_exists('m3uLogEvent')) {
     m3uLogEvent('subtitle', ['source' => 'aiostreams', 'sub' => substr($subUrl, 0, 300)]);
 }
 
+// Fetch, normalise and serve the WebVTT ourselves (cached for a day): the upstream proxy glues two WEBVTT
+// documents together and ExoPlayer renders no cue from that - see hlsCleanWebVtt(). Falls back to the plain
+// redirect (what every player got before) when the upstream cannot be fetched.
+require_once 'hls_shared.php';
+$cacheFile = sys_get_temp_dir() . '/subtitle_vtt_clean_' . sha1($subUrl) . '.vtt';
+$clean = null;
+if (is_file($cacheFile) && filesize($cacheFile) > 0 && (time() - filemtime($cacheFile)) < 86400) {
+    $clean = (string) file_get_contents($cacheFile);
+} else {
+    $safe = true;
+    if (function_exists('m3uIsSafeRemoteUrl')) {
+        $safe = m3uIsSafeRemoteUrl($subUrl);
+    }
+    if ($safe) {
+        $ch = curl_init($subUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 3,
+            CURLOPT_CONNECTTIMEOUT => 6,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+        ]);
+        $raw = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($raw !== false && $status === 200 && strpos((string) $raw, '-->') !== false) {
+            $clean = hlsCleanWebVtt($raw);
+            @file_put_contents($cacheFile, $clean);
+        }
+    }
+}
+
+if ($clean !== null) {
+    header('Content-Type: text/vtt; charset=utf-8');
+    header('Cache-Control: public, max-age=86400');
+    header('Content-Length: ' . strlen($clean));
+    echo $clean;
+    exit;
+}
+
 header('HTTP/1.1 302 Found');
 header('Location: ' . $subUrl);

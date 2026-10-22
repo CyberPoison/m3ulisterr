@@ -1616,6 +1616,21 @@ function plainVideoFallbackUrl($videoUrl) {
 // Without FPM the client is released by the Content-Length header the caller
 // already sent: flush every buffer, keep running if the client disconnects.
 // REQUIRES a Content-Length header on the response.
+// Without fastcgi_finish_request() (mod_php, as in the production image) the
+// Apache worker stays busy running the background probe after the response
+// has been sent, and a reverse proxy in front (Caddy) sees a complete
+// Content-Length response and parks that keep-alive connection in its idle
+// pool. The NEXT request it sends down that same connection then waits
+// behind the still-running script - measured on production as a master
+// playlist that answered nothing for 45-150 s right after a cold one while
+// the rest of the server stayed fast. "Connection: close" makes Apache end
+// the connection after the response so it can never be reused. Must be sent
+// before any output; hls_shared.php is included at the top of every script
+// that calls finishResponseEarly(), so it is done here at load time.
+if (!function_exists('fastcgi_finish_request') && PHP_SAPI !== 'cli' && !headers_sent()) {
+    header('Connection: close');
+}
+
 function finishResponseEarly() {
     if (function_exists('fastcgi_finish_request')) {
         fastcgi_finish_request();

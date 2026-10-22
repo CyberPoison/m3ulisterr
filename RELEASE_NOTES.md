@@ -4,6 +4,13 @@
 <details><summary><b>🌐 English Changelog</b></summary>
 
 
+### 📅 Update 10/22/2026
+
+**Fix: an HLS master playlist that answered nothing for 45-150 s right after a cold one (measured on production, Oppenheimer and Age of Ultron, then reproduced twice in a row).**
+- **Cause:** under mod_php the script keeps running the 30-40 s keyframe probe after the response is sent (no `fastcgi_finish_request`). Caddy in front saw a complete Content-Length response, kept that connection in its idle pool and sent the next request down it, where Apache could not read it until the probe finished. The rest of the server stayed fast (`player_api` 30-90 ms during the hang), which is what pointed to a pooled connection and not to worker exhaustion.
+- **Fix:** `hls_shared.php` now sends `Connection: close` when `fastcgi_finish_request` is unavailable, so Apache ends the connection after the response and it can never be reused. Verified locally (header present, playlist unchanged, `tests/hls_segment_retry_test.php` passes); to confirm in production, request a cold master playlist then the same one again right away.
+- **Benchmark (same day):** AIOStreams on the own VPS vs the public ElfHosted instance, full cold resolve of the Unlimited account: 0.75-2.2 s vs 11.9-16.4 s.
+
 ### 📅 Update 10/20/2026
 
 **Fix: the adult films that still failed after the link-check fix - two catalog-level causes (measured on a 30-film random sample: 25 played, all 5 failures were the second cause):**
